@@ -36,6 +36,8 @@ func main() {
 	switch os.Args[1] {
 	case "keygen":
 		err = keygen()
+	case "check-key":
+		err = checkKey()
 	case "sign":
 		err = sign(os.Args[2:])
 	case "manifest":
@@ -50,7 +52,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: relsign keygen | sign FILE | manifest -version V -out FILE")
+	fmt.Fprintln(os.Stderr, "usage: relsign keygen | check-key | sign FILE | manifest -version V -out FILE")
 	os.Exit(2)
 }
 
@@ -82,16 +84,10 @@ func sign(args []string) error {
 	}
 	file := fs.Arg(0)
 
-	seedB64 := strings.TrimSpace(os.Getenv(*keyEnv))
-	if seedB64 == "" {
-		return fmt.Errorf("%s is not set", *keyEnv)
+	priv, err := privateKey(*keyEnv)
+	if err != nil {
+		return err
 	}
-	seed, err := base64.StdEncoding.DecodeString(seedB64)
-	if err != nil || len(seed) != ed25519.SeedSize {
-		return fmt.Errorf("%s is not a base64 %d-byte ed25519 seed", *keyEnv, ed25519.SeedSize)
-	}
-	priv := ed25519.NewKeyFromSeed(seed)
-
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return err
@@ -101,6 +97,33 @@ func sign(args []string) error {
 		*out = file + ".sig"
 	}
 	return os.WriteFile(*out, []byte(sigLine+"\n"), 0o644)
+}
+
+func privateKey(keyEnv string) (ed25519.PrivateKey, error) {
+	seedB64 := strings.TrimSpace(os.Getenv(keyEnv))
+	if seedB64 == "" {
+		return nil, fmt.Errorf("%s is not set", keyEnv)
+	}
+	seed, err := base64.StdEncoding.DecodeString(seedB64)
+	if err != nil || len(seed) != ed25519.SeedSize {
+		return nil, fmt.Errorf("%s is not a base64 %d-byte ed25519 seed", keyEnv, ed25519.SeedSize)
+	}
+	return ed25519.NewKeyFromSeed(seed), nil
+}
+
+// checkKey proves the configured private key is trusted by installed clients,
+// without printing it or writing it to disk.
+func checkKey() error {
+	priv, err := privateKey("ARKEX_SIGNING_KEY")
+	if err != nil {
+		return err
+	}
+	keys, err := update.EmbeddedKeys()
+	if err != nil {
+		return err
+	}
+	data := []byte("arkex release key check")
+	return update.Verify(keys, data, []byte(update.SignatureLine(priv, data)))
 }
 
 func manifest(args []string) error {

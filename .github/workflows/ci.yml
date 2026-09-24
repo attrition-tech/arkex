@@ -42,6 +42,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - run: python -m unittest discover -s scripts -p 'test_release_control.py'
       - run: go build ./...
       - run: go vet ./...
       - name: Tests (race detector on Unix)

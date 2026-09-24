@@ -1,32 +1,48 @@
-# Native verification always runs. Publishing is opt-in after release secrets
-# are installed; until then use the CI-gated scripts/release.sh publish locally.
+# Manual runs validate settings without publishing. Tag publication is opt-in.
 name: release
 
 on:
+  workflow_dispatch:
   push:
     tags: ["v*"]
 
 permissions:
   contents: read
 
+concurrency:
+  group: arkex-release-publishing
+  cancel-in-progress: false
+
 jobs:
   verify:
+    if: github.event_name == 'push'
     uses: ./.github/workflows/ci.yml
 
-  publish:
+  r2:
     needs: verify
-    if: vars.ARKEX_RELEASE_PUBLISH == 'true'
+    if: >-
+      !cancelled() &&
+      ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+       (github.event_name == 'push' && needs.verify.result == 'success' && vars.ARKEX_RELEASE_PUBLISH == 'true'))
     runs-on: ubuntu-latest
+    environment: release
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
-      - run: go install github.com/goreleaser/goreleaser/v2@latest
-      - run: scripts/release.sh publish
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install boto3==1.42.0
+      - name: Validate settings (read-only)
+        if: github.event_name == 'workflow_dispatch'
+        run: python scripts/release_control.py check
         env:
           ARKEX_SIGNING_KEY: ${{ secrets.ARKEX_SIGNING_KEY }}
           ARKEX_DOWNLOAD_BASE: ${{ vars.ARKEX_DOWNLOAD_BASE }}
@@ -34,3 +50,50 @@ jobs:
           ARKEX_R2_ENDPOINT: ${{ vars.ARKEX_R2_ENDPOINT }}
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      - if: github.event_name == 'push'
+        run: go install github.com/goreleaser/goreleaser/v2@v2.14.3
+      - name: Publish signed R2 release
+        if: github.event_name == 'push'
+        run: scripts/release.sh publish
+        env:
+          ARKEX_SIGNING_KEY: ${{ secrets.ARKEX_SIGNING_KEY }}
+          ARKEX_DOWNLOAD_BASE: ${{ vars.ARKEX_DOWNLOAD_BASE }}
+          ARKEX_R2_BUCKET: ${{ vars.ARKEX_R2_BUCKET }}
+          ARKEX_R2_ENDPOINT: ${{ vars.ARKEX_R2_ENDPOINT }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      - uses: actions/upload-artifact@v4
+        if: always() && github.event_name == 'push'
+        with:
+          name: release-${{ github.sha }}
+          path: |
+            dist/arkex_*.tar.gz
+            dist/arkex_*.zip
+            dist/SHA256SUMS
+            dist/SHA256SUMS.sig
+          retention-days: 30
+          if-no-files-found: warn
+
+  github-release:
+    needs: r2
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-${{ github.sha }}
+          path: dist
+      - name: Publish GitHub release from the same signed assets
+        run: python scripts/release_control.py github "$RELEASE_TAG" dist
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}

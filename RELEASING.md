@@ -40,16 +40,25 @@ move to a lower version. Per-version directories are immutable; only
    `get.arkex.dev`, public access), and create an API token with
    *Object Read & Write* on that bucket.
 
-3. Secrets/environment for the release machine (Amp project secrets when
-   releasing from an orb):
+3. In GitHub **Settings → Environments → release**, configure these settings.
+   Keep the existing signing key for this project; do not generate a replacement
+   when setting up Actions.
 
-   | Variable | Value |
-   | --- | --- |
-   | `ARKEX_SIGNING_KEY` | base64 seed from step 1 |
-   | `ARKEX_DOWNLOAD_BASE` | `https://get.arkex.dev` (baked into the binary as the update source) |
-   | `ARKEX_R2_BUCKET` | bucket name |
-   | `ARKEX_R2_ENDPOINT` | `https://<account-id>.r2.cloudflarestorage.com` |
-   | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | R2 API token |
+   | Kind | Name | Value |
+   | --- | --- | --- |
+   | Secret | `ARKEX_SIGNING_KEY` | existing base64 signing seed |
+   | Secret | `R2_ACCESS_KEY_ID` | R2 access key ID |
+   | Secret | `R2_SECRET_ACCESS_KEY` | R2 secret access key |
+   | Variable | `ARKEX_DOWNLOAD_BASE` | `https://get.arkex.dev` |
+   | Variable | `ARKEX_R2_BUCKET` | release bucket name |
+   | Variable | `ARKEX_R2_ENDPOINT` | `https://<account-id>.r2.cloudflarestorage.com` |
+
+4. Run **Actions → release → Run workflow → main**. Manual dispatch only
+   validates configuration, checks the signing key against the embedded trusted
+   keys, and reads/lists R2. It does not publish or prove R2 write permission.
+   After it passes, enable tag publishing with the **repository-level** Actions
+   variable `ARKEX_RELEASE_PUBLISH=true`. Do not put this switch in the environment:
+   the job condition is evaluated before environment variables are available.
 
 ## Cut a release
 
@@ -66,11 +75,11 @@ the tagged revision before publishing.
 Push changes to both the Amp `origin` and GitHub `github` remotes. A push to Amp
 alone does not run native CI. Local `scripts/release.sh publish` now requires a
 successful GitHub `ci.yml` main push run for the exact commit being released.
-The GitHub tag workflow always verifies; its publish job is disabled until the
-repository variable `ARKEX_RELEASE_PUBLISH` is set to `true` and the release
-secrets/variables above are installed. Do not enable it while publishing the
-same tag locally. The Amp GitHub App cannot administer Actions secrets; an owner
-must configure them in GitHub settings. No release credentials are in the repo.
+The GitHub tag workflow always verifies; publication remains disabled until the
+repository switch above is enabled. GitHub serializes release runs and never
+cancels an in-progress publication. Do not publish locally while an Actions
+release is running. The Amp GitHub App cannot administer Actions secrets; an
+owner must configure them in GitHub settings. No release credentials are in the repo.
 
 ```sh
 go build -o arkex-smoke ./cmd/arkex  # use arkex-smoke.exe on Windows
@@ -107,19 +116,34 @@ number is not capped at 99. Set the version by tagging only when publishing,
 not during development. Publishing and pushing require authorization.
 
 ```sh
-git tag -a v0.1.0 -m v0.1.0
-scripts/release.sh publish
-git push --atomic origin main v0.1.0
-git push --atomic github main v0.1.0
-gh release create v0.1.0 --repo attrition-tech/arkex --verify-tag \
-  dist/arkex_*.tar.gz dist/arkex_*.zip dist/SHA256SUMS dist/SHA256SUMS.sig \
-  --title 'v0.1.0' --notes 'Describe the changes and verification.'
+git tag -a vX.Y.Z -m vX.Y.Z  # replace with the next patch version
+git push --atomic origin main vX.Y.Z
+git push --atomic github main vX.Y.Z
 ```
 
-`publish` refuses a dirty tree or an untagged HEAD, runs tests, builds all
-targets one at a time (`--parallelism 1`; five parallel Go links exhaust an
-8 GB machine), signs `SHA256SUMS`, and uploads `v0.1.0/…`, then
-`stable.json` and `install.sh`. Then push the tag along with `main`.
+Actions verifies native CI, then builds/signs/uploads to R2. A separate job
+publishes a GitHub Release with generated notes and the exact same seven assets,
+without access to R2 or signing secrets. GitHub drafts remain drafts until all
+assets are uploaded. Completed releases are never overwritten.
+
+`publish` refuses a dirty tree, an untagged HEAD, a commit outside `main`, an
+existing R2 version prefix, or a version no newer than `stable.json`. It builds
+targets one at a time (`--parallelism 1`), signs `SHA256SUMS`, and uploads versioned
+assets, then `stable.json` and `install.sh`.
+
+If only **github-release** fails, choose **Re-run failed jobs**: it downloads the
+original saved assets (retained for 30 days), compares existing assets by SHA-256,
+and resumes missing draft uploads. Do not rerun all jobs: R2 intentionally refuses
+republishing. If R2 publication or artifact storage fails, inspect the bucket and
+manifest before recovery; partial R2 releases require manual recovery or a new
+version, not a blind retry. An expired artifact also requires manual recovery.
+
+For exceptional local publishing, keep the Actions switch off, install GoReleaser
+v2.14.3 and `boto3==1.42.0` for Python 3.11+, and provide the same settings as above
+with `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` instead of the two R2 secret
+names. Run `scripts/release.sh publish`, then
+`python3 scripts/release_control.py github vX.Y.Z dist`. This requires successful
+main CI for the exact commit and must not run concurrently with another publisher.
 
 ## Test the whole flow locally
 

@@ -37,7 +37,15 @@ case "$mode" in
   publish)
     need ARKEX_SIGNING_KEY ARKEX_DOWNLOAD_BASE ARKEX_R2_BUCKET ARKEX_R2_ENDPOINT AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY
     tag=$(git describe --tags --exact-match 2>/dev/null) || { echo "error: HEAD is not at a v* tag; run: git tag -a vX.Y.Z -m vX.Y.Z" >&2; exit 1; }
+    if [ "${GITHUB_ACTIONS:-}" = true ]; then
+      [ "${GITHUB_REF_TYPE:-}" = tag ] || { echo "error: publishing requires a tag push" >&2; exit 1; }
+      tag="$GITHUB_REF_NAME"
+      [ "$(git rev-parse "$tag^{commit}")" = "$(git rev-parse HEAD)" ] || { echo "error: tag does not match checkout" >&2; exit 1; }
+      export GORELEASER_CURRENT_TAG="$tag"
+    fi
     [ -z "$(git status --porcelain)" ] || { echo "error: working tree is dirty" >&2; exit 1; }
+    git merge-base --is-ancestor HEAD origin/main || { echo "error: release commit must be on main" >&2; exit 1; }
+    python3 scripts/release_control.py check "$tag"
     # The Actions publish job already depends on native verification. Local
     # publishing must verify the same commit passed the GitHub main CI run.
     if [ "${GITHUB_ACTIONS:-}" != true ]; then

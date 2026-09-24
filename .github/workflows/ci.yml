@@ -1,4 +1,4 @@
-# Runs on github.com/dantearo/arkex-cli; Amp-hosted pushes alone do not run CI.
+# Runs on github.com/dantearo/arkex; Amp-hosted pushes alone do not run CI.
 name: ci
 
 on:

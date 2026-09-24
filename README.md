@@ -16,7 +16,7 @@ curl -fsSL https://get.arkex.dev/install.sh | sh
 Installs to `~/.arkex/bin`. Releases include signed checksums; set
 `ARKEX_REQUIRE_SIGNATURE=1` to require installer signature verification.
 
-**Windows:** download the x64 ZIP from [Releases](https://github.com/dantearo/arkex-cli/releases/latest),
+**Windows:** download the x64 ZIP from [Releases](https://github.com/dantearo/arkex/releases/latest),
 extract it, and add its folder to `PATH`. Shell tools require Git Bash on `PATH`.
 
 Supported: macOS Apple Silicon/Intel, Linux ARM64/x64, Windows x64.

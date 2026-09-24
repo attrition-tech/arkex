@@ -2,7 +2,7 @@
 
 Signed releases are static files on Cloudflare R2 at `https://get.arkex.dev`.
 `install.sh` and `arkex update` continue to use that host. Source and release
-downloads are also published at `https://github.com/dantearo/arkex`.
+downloads are also published at `https://github.com/attrition-tech/arkex`.
 The Go module path remains unchanged so existing imports keep working.
 
 ## Layout on the host
@@ -111,7 +111,7 @@ git tag -a v0.1.0 -m v0.1.0
 scripts/release.sh publish
 git push --atomic origin main v0.1.0
 git push --atomic github main v0.1.0
-gh release create v0.1.0 --repo dantearo/arkex --verify-tag \
+gh release create v0.1.0 --repo attrition-tech/arkex --verify-tag \
   dist/arkex_*.tar.gz dist/arkex_*.zip dist/SHA256SUMS dist/SHA256SUMS.sig \
   --title 'v0.1.0' --notes 'Describe the changes and verification.'
 ```
@@ -143,7 +143,7 @@ atomic swap against an in-process fake host.
 `site/` is plain HTML/CSS/JavaScript with no build step, analytics, or external
 fonts. `.github/workflows/pages.yml` deploys it on site changes and supports
 manual dispatch. Enable **Settings → Pages → Source: GitHub Actions** once in
-`dantearo/arkex`. Default URL: `https://dantearo.github.io/arkex/`.
+`attrition-tech/arkex`. Default URL: `https://attrition-tech.github.io/arkex/`.
 The Amp GitHub App may lack permission to enable Pages; an owner must do that.
 
 To use `arkex.dev`, first verify the domain in GitHub Pages, then configure the

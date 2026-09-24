@@ -41,7 +41,7 @@ case "$mode" in
     # The Actions publish job already depends on native verification. Local
     # publishing must verify the same commit passed the GitHub main CI run.
     if [ "${GITHUB_ACTIONS:-}" != true ]; then
-      result=$(gh run list --repo dantearo/arkex --workflow ci.yml --branch main --event push \
+      result=$(gh run list --repo attrition-tech/arkex --workflow ci.yml --branch main --event push \
         --commit "$(git rev-parse HEAD)" --limit 1 --json conclusion --jq '.[0].conclusion // "missing"')
       [ "$result" = success ] || { echo "error: native GitHub CI for HEAD must pass before publishing (state: $result)" >&2; exit 1; }
     fi

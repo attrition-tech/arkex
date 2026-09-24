@@ -162,6 +162,7 @@ const (
 )
 
 type block struct {
+	prompt  int // one-based saved prompt checkpoint
 	kind    blockKind
 	text    strings.Builder
 	name    string // tool name
@@ -214,6 +215,7 @@ type inputKey struct {
 	offset               int
 	chips                string // attachment names, NUL-separated
 	hoverChip            int
+	editing              bool
 }
 
 type model struct {
@@ -312,7 +314,9 @@ type model struct {
 	confirmUntil   time.Time
 	confirmFlash   int
 	promptFocus    *block // keyboard-highlighted sent prompt; never copied into input
-	scrollHover    bool   // pointer over the floating jump-to-latest control
+	editingPrompt  *promptEdit
+	editAfterStop  int
+	scrollHover    bool // pointer over the floating jump-to-latest control
 }
 
 func newModel(o Options) *model {
@@ -527,6 +531,11 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 		}
 		m.status = ""
 		m.refresh()
+		if m.editAfterStop != 0 {
+			index := m.editAfterStop
+			m.editAfterStop = 0
+			return m, m.beginPromptEdit(index)
+		}
 		return m, nil
 	case compactDoneMsg:
 		return m, m.compactDone(msg)
@@ -592,6 +601,9 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 }
 
 func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.pal == nil && m.pending == nil && m.promptFocus != nil && (k.String() == "e" || k.String() == "enter") {
+		return m, m.requestPromptEdit(m.promptFocus.prompt)
+	}
 	if m.promptFocus != nil && k.String() != "tab" && k.String() != "shift+tab" {
 		m.promptFocus = nil
 		m.refresh()
@@ -633,6 +645,10 @@ func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.pal != nil {
 		return m, m.paletteKey(k)
 	}
+	if m.editingPrompt != nil && k.String() == "esc" {
+		m.cancelPromptEdit()
+		return m, nil
+	}
 	if cmd, ok := m.compKey(k); ok {
 		return m, cmd
 	}
@@ -641,7 +657,7 @@ func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+p", "super+p":
 		return m, m.openPalette()
 	case "/":
-		if m.input.Value() == "" {
+		if m.input.Value() == "" && m.editingPrompt == nil {
 			return m, m.openPalette()
 		}
 	case "ctrl+c":
@@ -675,7 +691,7 @@ func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+shift+c", "super+c":
 		return m, m.copyActiveSelection()
 	case "tab", "shift+tab":
-		if m.input.Value() == "" {
+		if m.input.Value() == "" && m.editingPrompt == nil {
 			m.focusPrompt(k.String() == "tab")
 			return m, nil
 		}
@@ -693,6 +709,12 @@ func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 	case "enter":
 		text := strings.TrimSpace(m.input.Value())
+		if m.editingPrompt != nil {
+			if text != "" || len(m.attachments) != 0 {
+				return m, m.confirmPromptResend()
+			}
+			return m, nil
+		}
 		if text == "" && len(m.attachments) == 0 {
 			if m.paused && !m.running {
 				return m, m.continueRun()
@@ -890,12 +912,14 @@ func (m *model) submit(text string, files []fantasy.FilePart) tea.Cmd {
 	if m.conv == nil {
 		m.conv = session.New(m.o.Cwd)
 	}
-	m.blocks = append(m.blocks, userBlock(text, attachmentNames(files)))
 	send := expandMentions(m.o.Cwd, text) + m.takeShellNotes()
 	if send == "" {
 		send = "(see the attached image)"
 	}
 	msg := fantasy.NewUserMessage(send, files...)
+	b := userBlock(text, attachmentNames(files))
+	b.prompt = m.conv.Checkpoint(m.sess.Agent.Messages(), text, msg, m.sess.Name)
+	m.blocks = append(m.blocks, b)
 	return m.startRun(func(ctx context.Context, ag *agent.Agent, emit func(agent.Event)) error {
 		return ag.RunMessage(ctx, msg, emit)
 	})
@@ -1675,6 +1699,7 @@ func (m *model) inputView() string {
 	}
 	key.selStart, key.selEnd, key.sel = m.input.Selection()
 	key.hoverChip = m.hoverChip
+	key.editing = m.editingPrompt != nil
 	for _, a := range m.attachments {
 		key.chips += a.name + "\x00"
 	}
@@ -1686,6 +1711,10 @@ func (m *model) inputView() string {
 		body = chips + "\n" + body
 	}
 	view := borderStyle.Width(m.width).Render(body)
+	if key.editing && m.width > 6 {
+		label := ansi.Truncate(" Editing prompt · Enter resend · Esc cancel ", m.width-4, "…")
+		view = overlay(view, titleStyle.Render(label), 2, 0)
+	}
 	if m.inputRows > m.input.Height() {
 		rows := strings.Split(view, "\n")
 		start := 1

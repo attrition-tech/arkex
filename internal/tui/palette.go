@@ -261,6 +261,7 @@ func (m *model) paletteItems() []paletteItem {
 		paletteItem{group: "Copy", title: "Copy response or code", sub: responseCopyItems},
 		paletteItem{group: "Session", title: "New conversation", hint: "/clear", cmd: "/clear"},
 		paletteItem{group: "Session", title: "Resume session", hint: "/resume", sub: sessionItems},
+		paletteItem{group: "Session", title: "Edit sent prompt", hint: "tab · enter", sub: promptEditItems},
 		paletteItem{group: "Model", title: "Reasoning effort", hint: "/effort", sub: effortItems},
 		paletteItem{group: "Session", title: "Run timing", hint: "/timing", sub: timingItems},
 		paletteItem{group: "Session", title: mouse, hint: "/mouse", cmd: "/mouse"},

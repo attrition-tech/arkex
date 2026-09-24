@@ -49,6 +49,12 @@ Use `/model` to switch models, `/resume` for saved sessions, `/new` for a fresh
 conversation, and `/help` for commands. Press Esc twice to stop a run or Ctrl+C
 twice to exit when idle. Model output is untrusted: review changes before shipping.
 
+To edit a sent prompt, select it with Tab/Shift+Tab from an empty input and press
+Enter, or click the prompt. Edit and confirm to resend in a new conversation
+branch; the original stays in `/resume`. Esc cancels editing. File changes are
+not undone. The command palette's **Edit sent prompt** also includes prompts
+saved before context compaction.
+
 ## Build from source
 
 Use the Go version in [go.mod](go.mod):

@@ -50,7 +50,7 @@ func helpText() string {
 		fmt.Fprintf(&sb, "%-26s %s\n", head, c.desc)
 	}
 	sb.WriteString("\nmodes: plan = read-only tools, the model writes a plan · build = edits and commands ask per config · auto = trusted scope runs quietly. Explicit config denies apply in every mode.\n")
-	sb.WriteString("keys: enter send · shift+enter newline · tab highlights older sent messages from empty input, shift+tab newer then composer · up/down input history · / or ctrl+p command palette · @file attach a file (png/jpg/gif/webp become image chips; backspace on an empty input removes the last) · !cmd run a shell command · /mode switch mode · ctrl+l clear screen · esc or ctrl+c twice within 2s stops a run; ctrl+c twice exits when idle (selected text copies instead) · pgup/pgdown, ctrl+up/down, ctrl+home/end scroll · wheel scrolls · click toggles a card (one detail open at a time)")
+	sb.WriteString("keys: enter send · shift+enter newline · tab highlights older sent messages from empty input, shift+tab newer then composer · enter or e edits the highlighted prompt; click a sent prompt for Edit and resend · esc cancels editing; resend creates a new branch without undoing file changes · up/down input history · / or ctrl+p command palette · @file attach a file (png/jpg/gif/webp become image chips; backspace on an empty input removes the last) · !cmd run a shell command · /mode switch mode · ctrl+l clear screen · esc or ctrl+c twice within 2s stops a run; ctrl+c twice exits when idle (selected text copies instead) · pgup/pgdown, ctrl+up/down, ctrl+home/end scroll · wheel scrolls · click toggles a card (one detail open at a time)")
 	return sb.String()
 }
 

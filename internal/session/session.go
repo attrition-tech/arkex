@@ -28,21 +28,25 @@ import (
 
 // Session is one conversation and the state needed to continue it.
 type Session struct {
-	ID        string            `json:"id"`
-	Cwd       string            `json:"cwd"`
-	Title     string            `json:"title"`
-	Model     string            `json:"model,omitempty"`
-	Effort    *string           `json:"effort,omitempty"` // nil = legacy; empty string = provider default
-	Mode      string            `json:"mode,omitempty"`
-	State     string            `json:"state,omitempty"` // empty = active; archived or trash
-	Created   time.Time         `json:"created"`
-	Updated   time.Time         `json:"updated"`
-	UsageIn   int64             `json:"usage_in,omitempty"`
-	UsageOut  int64             `json:"usage_out,omitempty"`
-	LastInput int64             `json:"last_input,omitempty"` // latest request, not cumulative; zero means unknown
-	Messages  []fantasy.Message `json:"messages"`
-	savedHash [sha256.Size]byte // optimistic concurrency token; never serialized
-	saved     bool
+	ID           string             `json:"id"`
+	Cwd          string             `json:"cwd"`
+	Title        string             `json:"title"`
+	Model        string             `json:"model,omitempty"`
+	Effort       *string            `json:"effort,omitempty"` // nil = legacy; empty string = provider default
+	Mode         string             `json:"mode,omitempty"`
+	State        string             `json:"state,omitempty"` // empty = active; archived or trash
+	Created      time.Time          `json:"created"`
+	Updated      time.Time          `json:"updated"`
+	UsageIn      int64              `json:"usage_in,omitempty"`
+	UsageOut     int64              `json:"usage_out,omitempty"`
+	LastInput    int64              `json:"last_input,omitempty"` // latest request, not cumulative; zero means unknown
+	Messages     []fantasy.Message  `json:"messages"`
+	History      []fantasy.Message  `json:"history,omitempty"` // append-only context segments for prompt checkpoints
+	ContextStart int                `json:"context_start,omitempty"`
+	Prompts      []PromptCheckpoint `json:"prompts,omitempty"`
+	ParentID     string             `json:"parent_id,omitempty"`
+	savedHash    [sha256.Size]byte  // optimistic concurrency token; never serialized
+	saved        bool
 }
 
 // Summary is what listings need: everything but the messages.
@@ -81,6 +85,7 @@ func New(cwd string) *Session {
 
 // Update records the conversation state and refreshes the title and time.
 func (s *Session) Update(msgs []fantasy.Message, model, mode string, in, out int64) {
+	s.syncContext(msgs)
 	s.Messages = msgs
 	s.Model, s.Mode = model, mode
 	s.UsageIn, s.UsageOut = in, out

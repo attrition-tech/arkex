@@ -35,6 +35,8 @@ func (m *model) saveConv() {
 // newConv forgets the current conversation (already saved after its last
 // turn) so the next prompt starts a new session file.
 func (m *model) newConv() {
+	m.cancelPromptEdit()
+	m.editAfterStop = 0
 	m.requestTimings, m.runDuration = nil, 0
 	m.conv = nil
 	m.usageIn, m.usageOut, m.lastInput = 0, 0, 0
@@ -156,6 +158,9 @@ func (m *model) resumeWithModel(id, override string) tea.Cmd {
 }
 
 func (m *model) loadConversation(s *session.Session) {
+	m.cancelPromptEdit()
+	m.editAfterStop = 0
+	s.ImportCheckpoints(func(text string) bool { _, ok := agent.CompactSummary(text); return ok })
 	m.requestTimings, m.runDuration = nil, 0
 	messages := s.Messages
 	if providerOf(s.Model) != providerOf(m.sess.Name) {
@@ -173,6 +178,7 @@ func (m *model) loadConversation(s *session.Session) {
 		m.setMode(md)
 	}
 	m.conv = s
+	m.bindPromptCheckpoints()
 	note := fmt.Sprintf("resumed %q · %d messages · %s", s.Title, len(s.Messages), session.Age(s.Updated, time.Now()))
 	if s.Model != "" && s.Model != m.sess.Name {
 		note += "\nreplacement model: " + m.sess.Name

@@ -101,6 +101,13 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		clicked, cmd := m.selectRelease()
 		if clicked {
+			if s, ok := m.spanAt(m.vp.YOffset() + mo.Y); ok && s.b.kind == blockUser && s.b.prompt != 0 {
+				index := s.b.prompt
+				return m, m.openPaletteSub("Sent prompt", []paletteItem{
+					{title: "Edit and resend…", action: func(m *model) tea.Cmd { return m.requestPromptEdit(index) }},
+					{title: "Close", action: func(m *model) tea.Cmd { return m.closePalette() }},
+				})
+			}
 			m.transcriptClick(m.vp.YOffset() + mo.Y)
 		}
 		return m, cmd

@@ -1,0 +1,112 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+#
+# arkex releases are plain static files on an S3-compatible bucket (Cloudflare
+# R2) served under a custom domain, with matching assets on GitHub Releases.
+# `arkex update` and install.sh both read that layout (see internal/update).
+#
+# Run through scripts/release.sh, which validates the environment:
+#   ARKEX_DOWNLOAD_BASE   public base URL, e.g. https://get.arkex.dev (baked into the binary)
+#   ARKEX_SIGNING_KEY     base64 ed25519 seed (go run ./scripts/relsign keygen)
+#   ARKEX_R2_BUCKET       bucket name
+#   ARKEX_R2_ENDPOINT     https://<account-id>.r2.cloudflarestorage.com
+#   AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY   R2 API token
+version: 2
+
+project_name: arkex
+
+env:
+  - ARKEX_DOWNLOAD_BASE={{ if index .Env "ARKEX_DOWNLOAD_BASE" }}{{ .Env.ARKEX_DOWNLOAD_BASE }}{{ end }}
+  - ARKEX_R2_BUCKET={{ if index .Env "ARKEX_R2_BUCKET" }}{{ .Env.ARKEX_R2_BUCKET }}{{ end }}
+  - ARKEX_R2_ENDPOINT={{ if index .Env "ARKEX_R2_ENDPOINT" }}{{ .Env.ARKEX_R2_ENDPOINT }}{{ end }}
+
+before:
+  hooks:
+    - go mod tidy
+    # Channel manifest. Written outside dist/ because goreleaser requires dist/
+    # to be empty when it starts; uploaded to the bucket root by the second blob.
+    - go run ./scripts/relsign manifest -version {{ .Version }} -out .release/stable.json
+    # Installer copy with this host as its default download base.
+    - sh -c 'sed "s|https://get.arkex.dev|{{ .Env.ARKEX_DOWNLOAD_BASE }}|g" install.sh > .release/install.sh'
+
+builds:
+  - id: arkex
+    main: ./cmd/arkex
+    binary: arkex
+    env:
+      - CGO_ENABLED=0
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ignore:
+      - goos: windows
+        goarch: arm64
+    flags: [-trimpath]
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .ShortCommit }}
+      - -X github.com/dantearo/arkex/internal/update.DefaultBaseURL={{ .Env.ARKEX_DOWNLOAD_BASE }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    # arkex_0.1.0_linux_amd64.tar.gz — install.sh and internal/update depend on this.
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: SHA256SUMS
+  algorithm: sha256
+
+# ed25519 signature over SHA256SUMS. The matching public key is embedded in
+# the binary (internal/update/keys.txt) and in install.sh.
+signs:
+  - id: ed25519
+    cmd: go
+    args: ["run", "./scripts/relsign", "sign", "-out", "${signature}", "${artifact}"]
+    signature: "${artifact}.sig"
+    artifacts: checksum
+
+blobs:
+  # Immutable per-version assets: <base>/v0.1.0/…
+  - provider: s3
+    bucket: "{{ .Env.ARKEX_R2_BUCKET }}"
+    endpoint: "{{ .Env.ARKEX_R2_ENDPOINT }}"
+    region: auto
+    s3_force_path_style: true
+    directory: "{{ .Tag }}"
+    cache_control: [public, max-age=31536000, immutable]
+  # Mutable channel pointer + installer at the bucket root.
+  - provider: s3
+    bucket: "{{ .Env.ARKEX_R2_BUCKET }}"
+    endpoint: "{{ .Env.ARKEX_R2_ENDPOINT }}"
+    region: auto
+    s3_force_path_style: true
+    directory: "/"
+    extra_files_only: true
+    extra_files:
+      - glob: .release/stable.json
+      - glob: .release/install.sh
+    cache_control: [public, max-age=300]
+
+snapshot:
+  # Untagged builds: 0.1.1-dev.abc1234 — valid semver, sorts above the last tag.
+  version_template: "{{ incpatch .Version }}-dev.{{ .ShortCommit }}"
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^chore:"
+      - "^test:"
+
+# GitHub assets are uploaded separately after signed R2 publication.
+release:
+  disable: true

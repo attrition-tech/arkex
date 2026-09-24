@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "connections": {
+    "fake": {
+      "kind": "llm-server",
+      "api": "openai-compat",
+      "baseUrl": "http://127.0.0.1:8765/v1",
+      "apiKey": "sk-test",
+      "models": [
+        { "id": "deepseek-v4-flash", "reasoning": true, "compat": { "thinking": "deepseek" } },
+        { "id": "qwen3-next-fp8", "reasoning": true, "compat": { "thinking": "qwen" } }
+      ]
+    }
+  },
+  "default": "fake/deepseek-v4-flash",
+  "ui": { "mouse": true }
+}

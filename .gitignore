@@ -1,0 +1,15 @@
+/dist/
+/arkex
+/bin/
+*.test
+*.out
+/.amp/
+/.agents/
+/PLAN.md
+/.release/
+__pycache__/
+.env
+.env.*
+!.env.example
+*.key
+*.pem

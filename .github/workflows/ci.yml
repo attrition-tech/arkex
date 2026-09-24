@@ -1,0 +1,110 @@
+# Runs on github.com/dantearo/arkex-cli; Amp-hosted pushes alone do not run CI.
+name: ci
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  secrets:
+    name: secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go install github.com/zricethezav/gitleaks/v8@v8.30.1
+      - run: gitleaks git --redact --log-opts=--all .
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: go build ./...
+      - run: go vet ./...
+      - name: Tests (race detector on Unix)
+        shell: bash
+        run: |
+          set -euo pipefail
+          flags=()
+          if [[ "$RUNNER_OS" != Windows ]]; then flags+=(-race); fi
+          go test "${flags[@]}" -count=1 -timeout=10m -json ./... | tee test-results.jsonl
+      - name: Native binary smoke test (all operating systems)
+        shell: bash
+        run: |
+          set -euo pipefail
+          binary="$RUNNER_TEMP/arkex"
+          if [[ "$RUNNER_OS" == Windows ]]; then binary="$binary.exe"; fi
+          go build -o "$binary" ./cmd/arkex
+          python scripts/smoke.py "$binary" | tee smoke-results.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-tests-${{ matrix.os }}
+          path: |
+            test-results.jsonl
+            smoke-results.txt
+          retention-days: 14
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: test -z "$(gofmt -l .)" || { gofmt -l .; echo 'run gofmt -w .'; exit 1; }
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
+
+  licenses:
+    name: dependency licenses (MIT/Apache-2.0/BSD/ISC only)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go install github.com/google/go-licenses/v2@latest
+      - run: go-licenses check ./... --allowed_licenses=MIT,Apache-2.0,BSD-2-Clause,BSD-3-Clause,ISC
+
+  goreleaser-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: check
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          args: build --snapshot --clean --single-target

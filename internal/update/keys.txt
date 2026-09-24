@@ -1,0 +1,3 @@
+# arkex release public keys — one "<keyid> <base64 ed25519 public key>" per line.
+# Generated 2026-09-18 with `go run ./scripts/relsign keygen`; see sign.go.
+f2508f69e631cc4b ++8T50Iox71q3eRkAt6DJkQ6+O4yJg74FzsanJqbSyc=

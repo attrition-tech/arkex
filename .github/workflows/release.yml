@@ -1,0 +1,36 @@
+# Native verification always runs. Publishing is opt-in after release secrets
+# are installed; until then use the CI-gated scripts/release.sh publish locally.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+
+  publish:
+    needs: verify
+    if: vars.ARKEX_RELEASE_PUBLISH == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go install github.com/goreleaser/goreleaser/v2@latest
+      - run: scripts/release.sh publish
+        env:
+          ARKEX_SIGNING_KEY: ${{ secrets.ARKEX_SIGNING_KEY }}
+          ARKEX_DOWNLOAD_BASE: ${{ vars.ARKEX_DOWNLOAD_BASE }}
+          ARKEX_R2_BUCKET: ${{ vars.ARKEX_R2_BUCKET }}
+          ARKEX_R2_ENDPOINT: ${{ vars.ARKEX_R2_ENDPOINT }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}

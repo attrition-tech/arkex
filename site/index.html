@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Arkex is an open-source terminal coding agent. Bring your own models. Install on macOS, Linux, or Windows.">
+  <title>Arkex — your terminal, your models.</title>
+  <script>
+    try {
+      const theme = localStorage.getItem('arkex-theme');
+      if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
+    } catch {}
+  </script>
+  <link rel="stylesheet" href="style.css">
+  <script src="site.js" defer></script>
+</head>
+<body>
+  <header class="wrap">
+    <a class="brand" href="./" aria-label="Arkex home"><span aria-hidden="true">›_</span> arkex</a>
+    <nav aria-label="Main navigation">
+      <a href="https://github.com/dantearo/arkex-cli#configure">Docs</a>
+      <a href="https://github.com/dantearo/arkex-cli">GitHub <span aria-hidden="true">↗</span></a>
+      <select id="theme" aria-label="Color theme" hidden>
+        <option value="system">System</option>
+        <option value="light">Light</option>
+        <option value="dark">Dark</option>
+      </select>
+    </nav>
+  </header>
+  <main class="wrap">
+    <section class="hero" aria-labelledby="title">
+      <p class="eyebrow"><span class="dot" aria-hidden="true"></span> OPEN SOURCE · MIT LICENSED</p>
+      <h1 id="title">Your terminal.<br><span>Your models.</span></h1>
+      <p class="intro">A small coding agent for the place you already work. Read, edit, and run code with your own models—and control what gets approved.</p>
+      <div class="install">
+        <div class="install-heading"><span>INSTALL / macOS + Linux</span><button id="copy" type="button" hidden>Copy command</button></div>
+        <pre tabindex="0" aria-label="Install command"><code id="command">curl -fsSL https://get.arkex.dev/install.sh | sh</code></pre>
+        <span id="copy-status" role="status" aria-live="polite"></span>
+      </div>
+      <p class="install-note">One binary. No runtime to install. <a href="https://get.arkex.dev/install.sh">Inspect the script ↗</a></p>
+    </section>
+
+    <section class="platforms" aria-labelledby="platform-title">
+      <div class="section-heading"><h2 id="platform-title">At home in your terminal.</h2><span>SUPPORTED BUILDS</span></div>
+      <div class="platform-grid">
+        <article><span class="platform-symbol" aria-hidden="true">⌘</span><h3>macOS</h3><p>Apple Silicon · Intel</p><span class="tag">Shell installer</span></article>
+        <article><span class="platform-symbol" aria-hidden="true">~</span><h3>Linux</h3><p>ARM64 · x64</p><span class="tag">Shell installer</span></article>
+        <article><span class="platform-symbol" aria-hidden="true">⊞</span><h3>Windows</h3><p>x64 · ZIP download</p><a class="tag" href="https://github.com/dantearo/arkex-cli/releases/latest">Download release ↗</a><p class="fine">Shell tools need Git Bash on PATH.</p></article>
+      </div>
+    </section>
+
+    <section class="details" aria-label="How Arkex works">
+      <article><span class="number">01 / CONNECT</span><h2>Bring your own intelligence.</h2><p>Use a cloud API, an OpenAI-compatible endpoint, or a local server. Configure your connections inside Arkex.</p></article>
+      <article><span class="number">02 / WORK</span><h2>Stay in the conversation.</h2><p>Resume sessions, switch models, inspect tool calls, and choose how much autonomy to grant. No telemetry.</p></article>
+      <article><span class="number">03 / UPDATE</span><h2>Keep moving.</h2><p>Run <code>arkex update</code> for the latest signed release. Your configuration and saved sessions stay with you.</p></article>
+    </section>
+    <div class="getting-started"><p>Installed? Run <code>arkex</code>, then open <code>/connections</code>.</p><a href="https://github.com/dantearo/arkex-cli#configure">Get started <span aria-hidden="true">→</span></a></div>
+  </main>
+  <footer class="wrap"><span>arkex <span class="muted">/ made for the command line.</span></span><a href="https://github.com/dantearo/arkex-cli/blob/main/LICENSE">MIT license ↗</a></footer>
+</body>
+</html>

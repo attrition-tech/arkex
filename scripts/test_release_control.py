@@ -43,7 +43,8 @@ class ReleaseTests(unittest.TestCase):
         if args[:2] == ("api", "--paginate"):
             return json.dumps([self.other_releases + ([self.remote] if self.remote else [])])
         if args[0] == "api":
-            return json.dumps(self.remote)
+            # GitHub's get-by-tag endpoint does not resolve unpublished drafts.
+            raise subprocess.CalledProcessError(1, ["gh", *args], stderr="HTTP 404")
         action = args[1]
         if action == "download":
             name = args[args.index("--pattern") + 1]

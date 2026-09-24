@@ -86,7 +86,13 @@ def github(tag, directory):
     if release is None:
         gh("release", "create", tag, "--repo", REPO, "--verify-tag", "--draft",
            "--title", f"Arkex {tag}", "--generate-notes")
-        release = json.loads(gh("api", f"repos/{REPO}/releases/tags/{tag}"))
+        # Get-by-tag only resolves published releases. The authenticated list
+        # includes drafts and also lets a failed upload resume on a rerun.
+        pages = json.loads(gh("api", "--paginate", "--slurp", f"repos/{REPO}/releases?per_page=100"))
+        releases = [r for page in pages for r in page]
+        release = next((r for r in releases if r["tag_name"] == tag), None)
+        if release is None:
+            raise ValueError("Created draft is not visible yet; rerun the GitHub release job")
     existing = {a["name"] for a in release["assets"]}
     with tempfile.TemporaryDirectory(prefix="arkex-release-") as temp:
         for name in names:

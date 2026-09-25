@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"charm.land/fantasy"
@@ -104,21 +105,23 @@ func TestRequestTimingBoundaries(t *testing.T) {
 }
 
 func TestRequestTimingAccumulatesConnectionsAcrossAttempts(t *testing.T) {
-	ctx, timing := traceRequest(t.Context(), time.Now())
-	trace := httptrace.ContextClientTrace(ctx)
-	trace.GetConn("first")
-	trace.GotConn(httptrace.GotConnInfo{})
-	trace.WroteRequest(httptrace.WroteRequestInfo{})
-	firstDispatch, firstConnection := timing()
+	synctest.Test(t, func(t *testing.T) {
+		ctx, timing := traceRequest(t.Context(), time.Now())
+		trace := httptrace.ContextClientTrace(ctx)
+		trace.GetConn("first")
+		time.Sleep(time.Millisecond)
+		trace.GotConn(httptrace.GotConnInfo{})
+		trace.WroteRequest(httptrace.WroteRequestInfo{})
 
-	trace.GetConn("second")
-	time.Sleep(firstDispatch + time.Millisecond)
-	trace.GotConn(httptrace.GotConnInfo{})
-	trace.WroteRequest(httptrace.WroteRequestInfo{})
-	dispatch, connection := timing()
-	if dispatch != firstDispatch || connection <= firstConnection || connection <= dispatch {
-		t.Fatalf("dispatch must stay at first write while connection accumulates: first=(%s, %s), final=(%s, %s)", firstDispatch, firstConnection, dispatch, connection)
-	}
+		trace.GetConn("second")
+		time.Sleep(2 * time.Millisecond)
+		trace.GotConn(httptrace.GotConnInfo{})
+		trace.WroteRequest(httptrace.WroteRequestInfo{})
+		dispatch, connection := timing()
+		if dispatch != time.Millisecond || connection != 3*time.Millisecond {
+			t.Fatalf("want first dispatch 1ms and cumulative connection 3ms, got (%s, %s)", dispatch, connection)
+		}
+	})
 }
 
 // Loopback isolates client costs; it is not a comparison of model vendors or

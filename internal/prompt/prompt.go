@@ -57,6 +57,9 @@ func Build(o Options) string {
 // Instructions uses the same delimited form at startup and during tool access.
 // The end marker distinguishes a complete file from an older content prefix.
 func Instructions(path, body string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
 	return "# Project instructions from " + path + "\n" + body + "\n# End project instructions from " + path + "\n" +
 		"Scope: " + filepath.Dir(path) + " and its descendants only. More specific directory instructions take precedence within their scope.\n"
 }

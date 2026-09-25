@@ -63,14 +63,22 @@ func TestBuildIncludesEnvironmentAndProjectInstructions(t *testing.T) {
 	write(t, filepath.Join(sub, "AGENTS.md"), "cmd rules")
 
 	p := Build(Options{Cwd: sub, Now: time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC), Model: "local/m"})
+	rootInstructions, err := filepath.EvalSymlinks(filepath.Join(repo, "AGENTS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	subInstructions, err := filepath.EvalSymlinks(filepath.Join(sub, "AGENTS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	for _, want := range []string{
 		"You are arkex",
 		"Working directory: " + sub + "\n",
 		"Date: 2026-09-18\n",
 		"Model: local/m\n",
-		"# Project instructions from " + filepath.Join(repo, "AGENTS.md") + "\nAlways run go vet.\n",
-		"# Project instructions from " + filepath.Join(sub, "AGENTS.md") + "\ncmd rules\n",
+		"# Project instructions from " + rootInstructions + "\nAlways run go vet.\n",
+		"# Project instructions from " + subInstructions + "\ncmd rules\n",
 	} {
 		if !strings.Contains(p, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, p)
@@ -84,5 +92,17 @@ func TestBuildIncludesEnvironmentAndProjectInstructions(t *testing.T) {
 	p = Build(Options{Cwd: t.TempDir()})
 	if strings.Contains(p, "Date:") || strings.Contains(p, "Model:") || strings.Contains(p, "Project instructions") {
 		t.Fatalf("optional lines present:\n%s", p)
+	}
+}
+
+func TestInstructionsNormalizeDirectoryAliases(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, "real", "AGENTS.md"), "same rules")
+	alias := filepath.Join(root, "alias")
+	if err := os.Symlink(filepath.Join(root, "real"), alias); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if Instructions(filepath.Join(alias, "AGENTS.md"), "same rules") != Instructions(filepath.Join(root, "real", "AGENTS.md"), "same rules") {
+		t.Fatal("same instruction file has different identities through directory alias")
 	}
 }

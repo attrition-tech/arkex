@@ -19,6 +19,14 @@ type promptEdit struct {
 }
 
 func promptEditItems(m *model) []paletteItem {
+	return promptItems(m, (*model).requestPromptEdit)
+}
+
+func promptRemoveItems(m *model) []paletteItem {
+	return promptItems(m, (*model).confirmPromptRemove)
+}
+
+func promptItems(m *model, action func(*model, int) tea.Cmd) []paletteItem {
 	var items []paletteItem
 	if m.conv != nil {
 		for i := len(m.conv.Prompts); i > 0; i-- {
@@ -28,11 +36,11 @@ func promptEditItems(m *model) []paletteItem {
 				label = "Image prompt"
 			}
 			items = append(items, paletteItem{title: fmt.Sprintf("%d · %s", i, ansi.Truncate(label, 45, "…")),
-				action: func(m *model) tea.Cmd { return m.requestPromptEdit(index) }})
+				action: func(m *model) tea.Cmd { return action(m, index) }})
 		}
 	}
 	if len(items) == 0 {
-		items = append(items, paletteItem{title: "No saved prompts to edit", action: func(m *model) tea.Cmd { return m.closePalette() }})
+		items = append(items, paletteItem{title: "No saved prompts", action: func(m *model) tea.Cmd { return m.closePalette() }})
 	}
 	return items
 }
@@ -106,17 +114,9 @@ func (m *model) resendPrompt() tea.Cmd {
 	if m.running || e == nil || m.conv == nil || m.conv.ID != e.sessionID || m.sess.Agent == nil {
 		return m.closePalette()
 	}
-	next, err := m.conv.Fork(e.index)
-	if err == nil {
-		// Never abandon the original branch if it could not be saved.
-		m.conv.Update(m.sess.Agent.Messages(), m.sess.Name, string(m.mode()), m.usageIn, m.usageOut)
-		err = m.conv.Save()
-	}
+	next, err := m.forkPrompt(e.index)
 	if err != nil {
 		return m.sessionError(err)
-	}
-	if providerOf(next.Model) != providerOf(m.sess.Name) {
-		next.Messages = stripReasoning(next.Messages)
 	}
 	text := m.takeImageMentions(strings.TrimSpace(m.input.Value()))
 	files := m.fileParts()
@@ -135,6 +135,85 @@ func (m *model) resendPrompt() tea.Cmd {
 	m.hist.add(text)
 	m.flash("New branch · original conversation kept in Sessions")
 	return m.submit(text, files)
+}
+
+// forkPrompt requires an idle agent and saves the source before switching away.
+func (m *model) forkPrompt(index int) (*session.Session, error) {
+	next, err := m.conv.Fork(index)
+	if err == nil {
+		// Never abandon the original branch if it could not be saved.
+		m.conv.Update(m.sess.Agent.Messages(), m.sess.Name, string(m.mode()), m.usageIn, m.usageOut)
+		err = m.conv.Save()
+	}
+	if err != nil {
+		return nil, err
+	}
+	if providerOf(next.Model) != providerOf(m.sess.Name) {
+		next.Messages = stripReasoning(next.Messages)
+	}
+	return next, nil
+}
+
+func (m *model) confirmPromptRemove(index int) tea.Cmd {
+	if m.conv == nil || index < 1 || index > len(m.conv.Prompts) {
+		return nil
+	}
+	id := m.conv.ID
+	label := "Remove in a new branch"
+	if m.running {
+		label = "Stop; remove in new branch"
+	}
+	return m.openPaletteSub("Remove prompt and later?", []paletteItem{
+		{title: "Cancel", action: func(m *model) tea.Cmd { return m.closePalette() }},
+		{title: label, detail: "Original kept; files unchanged.", action: func(m *model) tea.Cmd {
+			if m.conv == nil || m.conv.ID != id {
+				return m.closePalette()
+			}
+			if m.running {
+				m.removeOnStop = index
+				m.cancelRun()
+				return m.closePalette()
+			}
+			return m.removePrompt(index)
+		}},
+	})
+}
+
+func (m *model) removePrompt(index int) tea.Cmd {
+	if m.running || m.conv == nil || m.sess.Agent == nil {
+		return nil
+	}
+	next, err := m.forkPrompt(index)
+	if err != nil {
+		return m.sessionError(err)
+	}
+	next.Title = m.conv.Title + " (trimmed)"
+	next.Update(next.Messages, m.sess.Name, string(m.mode()), 0, 0)
+	if m.sess.Agent.Model != nil {
+		level := m.sess.Agent.Model.Ref.Thinking
+		next.Effort = &level
+	}
+	if err := next.Save(); err != nil {
+		return m.sessionError(err)
+	}
+	cmd := m.closePalette()
+	m.loadConversation(next)
+	// Neither pending shell context nor a continuation belongs to this branch.
+	m.shellNotes = nil
+	m.flash("Removed from this branch · original kept in Sessions · files unchanged")
+	return cmd
+}
+
+func (m *model) finishPromptAction() tea.Cmd {
+	if index := m.removeOnStop; index != 0 {
+		m.removeOnStop, m.editAfterStop = 0, 0
+		return m.removePrompt(index)
+	}
+	if index := m.editAfterStop; index != 0 {
+		m.editAfterStop = 0
+		return m.beginPromptEdit(index)
+	}
+	return nil
 }
 
 // Match surviving user messages backwards. Repeated prompts remain distinct;

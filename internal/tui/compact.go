@@ -81,12 +81,7 @@ func (m *model) compactDone(msg compactDoneMsg) tea.Cmd {
 		m.saveConv()
 	}
 	m.refresh()
-	if m.editAfterStop != 0 {
-		index := m.editAfterStop
-		m.editAfterStop = 0
-		return m.beginPromptEdit(index)
-	}
-	return nil
+	return m.finishPromptAction()
 }
 
 // learnedContextWindow reports a window the agent picked up from an

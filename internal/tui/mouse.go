@@ -105,6 +105,7 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 				index := s.b.prompt
 				return m, m.openPaletteSub("Sent prompt", []paletteItem{
 					{title: "Edit and resend…", action: func(m *model) tea.Cmd { return m.requestPromptEdit(index) }},
+					{title: "Remove from here…", action: func(m *model) tea.Cmd { return m.confirmPromptRemove(index) }},
 					{title: "Close", action: func(m *model) tea.Cmd { return m.closePalette() }},
 				})
 			}

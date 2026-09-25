@@ -132,10 +132,10 @@ func UserText(m fantasy.Message) string {
 // ErrConflict prevents a stale process from overwriting a changed/deleted session.
 var ErrConflict = errors.New("session changed in another process; disk left unchanged and this version has not been saved")
 
-// Save writes the session atomically. Sessions without messages are not
-// written, so opening arkex and quitting leaves nothing behind.
+// Save writes the session atomically. Empty branches are intentional and saved;
+// simply opening arkex and quitting still leaves nothing behind.
 func (s *Session) Save() error {
-	if len(s.Messages) == 0 {
+	if len(s.Messages) == 0 && s.ParentID == "" {
 		return nil
 	}
 	dir, err := Dir(s.Cwd)

@@ -125,7 +125,7 @@ func TestEditCancelAndKeyboardMouseEntry(t *testing.T) {
 		y := s.top - h.vp.YOffset()
 		h.Update(tea.MouseClickMsg{X: 4, Y: y, Button: tea.MouseLeft})
 		h.Update(tea.MouseReleaseMsg{X: 4, Y: y, Button: tea.MouseLeft})
-		if h.pal == nil || h.pal.view[0].title != "Edit and resend…" {
+		if h.pal == nil || h.pal.view[0].title != "Edit and resend…" || h.pal.view[1].title != "Remove from here…" {
 			t.Fatal("mouse action missing")
 		}
 		return
@@ -212,5 +212,122 @@ func TestLegacyRepeatedPromptsMapToDistinctCheckpoints(t *testing.T) {
 	h.loadConversation(legacy)
 	if len(legacy.Prompts) != 1 {
 		t.Fatal("synthetic summary became editable")
+	}
+}
+
+func TestRemovePromptAfterCompactionAndResume(t *testing.T) {
+	lm := &fakeLM{script: []string{streamText("keep answer", 20), streamText("discard answer", 20),
+		streamText("later answer", 20), jsonReply("summary containing discard prompt"), streamText("new answer", 20)}}
+	h := fakeAgentModel(t, lm, 100000)
+	sendEditTest(h, "keep prompt")
+	sendEditTest(h, "discard prompt")
+	sendEditTest(h, "later prompt")
+	originalID := h.conv.ID
+	h.drive(h.compact())
+	s, err := session.Load(h.o.Cwd, originalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.loadConversation(s)
+	h.setInput("unsent draft")
+	h.attachments = []attachment{{name: "draft.png", mediaType: "image/png", data: []byte{8}}}
+	h.confirmPromptRemove(2)
+	h.pal.activate(h.model) // Cancel is the default.
+	if h.conv.ID != originalID || h.input.Value() != "unsent draft" {
+		t.Fatal("cancel changed conversation or draft")
+	}
+	h.confirmPromptRemove(2)
+	h.pal.sel = 1
+	h.drive(h.pal.activate(h.model))
+	if h.conv.ID == originalID || h.running || len(lm.requests) != 4 {
+		t.Fatal("removal must fork without a model call")
+	}
+	if h.input.Value() != "unsent draft" || len(h.attachments) != 1 {
+		t.Fatal("removal lost draft")
+	}
+	branch, err := session.Load(h.o.Cwd, h.conv.ID)
+	if err != nil || len(branch.Prompts) != 1 || len(branch.Messages) != 2 {
+		t.Fatalf("branch not saved: %v", err)
+	}
+	original, err := session.Load(h.o.Cwd, originalID)
+	if err != nil || len(original.Prompts) != 3 {
+		t.Fatalf("original changed: %v", err)
+	}
+	h.loadConversation(branch)
+	sendEditTest(h, "new prompt")
+	wire, _ := json.Marshal(lm.requests[4]["messages"])
+	for _, bad := range []string{"discard", "later", "summary containing"} {
+		if strings.Contains(string(wire), bad) {
+			t.Fatalf("removed context leaked: %s", wire)
+		}
+	}
+	for _, good := range []string{"keep prompt", "keep answer", "new prompt"} {
+		if !strings.Contains(string(wire), good) {
+			t.Fatalf("lost prior context: %s", wire)
+		}
+	}
+}
+
+func TestRemoveFirstPromptStopsBeforeForkAndPersistsEmptyBranch(t *testing.T) {
+	for _, compacting := range []bool{false, true} {
+		h := fakeAgentModel(t, &fakeLM{script: []string{streamText("answer", 20)}}, 100000)
+		sendEditTest(h, "first prompt")
+		originalID := h.conv.ID
+		h.focusPrompt(true)
+		h.Update(tea.KeyPressMsg{Code: tea.KeyDelete})
+		if h.pal == nil || h.conv.ID != originalID {
+			t.Fatal("Delete must open confirmation, not remove immediately")
+		}
+		h.pal.activate(h.model)
+		if h.conv.ID != originalID {
+			t.Fatal("default keyboard action must cancel")
+		}
+		h.running, h.compacting = true, compacting
+		cancelled := false
+		h.cancel = func() { cancelled = true }
+		h.confirmPromptRemove(1)
+		h.pal.sel = 1
+		h.pal.activate(h.model)
+		if !cancelled || h.conv.ID != originalID || h.removeOnStop != 1 {
+			t.Fatal("fork raced active run")
+		}
+		if compacting {
+			h.Update(compactDoneMsg{err: context.Canceled})
+		} else {
+			h.Update(runDoneMsg{err: context.Canceled})
+		}
+		if h.running || h.paused || h.conv.ID == originalID || h.removeOnStop != 0 {
+			t.Fatal("did not finish removal after stopping")
+		}
+		branch, err := session.Load(h.o.Cwd, h.conv.ID)
+		if err != nil || len(branch.Messages) != 0 || branch.ParentID != originalID {
+			t.Fatalf("empty branch not persisted: %v", err)
+		}
+		h.loadConversation(branch)
+		if len(h.sess.Agent.Messages()) != 0 || len(h.conv.Prompts) != 0 {
+			t.Fatal("empty branch resurrected removed prompt")
+		}
+	}
+}
+
+func TestRemovePromptSaveConflictPreservesSource(t *testing.T) {
+	h := fakeAgentModel(t, &fakeLM{script: []string{streamText("answer", 20)}}, 100000)
+	sendEditTest(h, "original")
+	id := h.conv.ID
+	other, err := session.Load(h.o.Cwd, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other.Title = "changed elsewhere"
+	if err := other.Save(); err != nil {
+		t.Fatal(err)
+	}
+	h.removePrompt(1)
+	if h.conv.ID != id || len(h.sess.Agent.Messages()) != 2 {
+		t.Fatal("failed removal changed active context")
+	}
+	list, err := session.List(h.o.Cwd)
+	if err != nil || len(list) != 1 {
+		t.Fatal("created branch despite source conflict")
 	}
 }

@@ -55,6 +55,10 @@ branch; the original stays in `/resume`. Esc cancels editing. File changes are
 not undone. The command palette's **Edit sent prompt** also includes prompts
 saved before context compaction.
 
+Choose **Remove from here…** from a sent prompt's menu (or press Delete while
+it is selected) to create a branch without that prompt and everything after it.
+Confirmation is required; the original conversation and file changes remain.
+
 ## Build from source
 
 Use the Go version in [go.mod](go.mod):

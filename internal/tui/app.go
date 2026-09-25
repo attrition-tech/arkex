@@ -316,6 +316,7 @@ type model struct {
 	promptFocus    *block // keyboard-highlighted sent prompt; never copied into input
 	editingPrompt  *promptEdit
 	editAfterStop  int
+	removeOnStop   int
 	scrollHover    bool // pointer over the floating jump-to-latest control
 }
 
@@ -531,12 +532,7 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 		}
 		m.status = ""
 		m.refresh()
-		if m.editAfterStop != 0 {
-			index := m.editAfterStop
-			m.editAfterStop = 0
-			return m, m.beginPromptEdit(index)
-		}
-		return m, nil
+		return m, m.finishPromptAction()
 	case compactDoneMsg:
 		return m, m.compactDone(msg)
 	case sessionTitleMsg:
@@ -601,6 +597,9 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 }
 
 func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.pal == nil && m.pending == nil && m.promptFocus != nil && k.String() == "delete" {
+		return m, m.confirmPromptRemove(m.promptFocus.prompt)
+	}
 	if m.pal == nil && m.pending == nil && m.promptFocus != nil && (k.String() == "e" || k.String() == "enter") {
 		return m, m.requestPromptEdit(m.promptFocus.prompt)
 	}

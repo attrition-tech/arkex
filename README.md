@@ -1,4 +1,4 @@
-# Arkex
+# arkex
 
 A terminal coding agent for your own models. Read, edit, and run code with
 OpenAI-compatible APIs, local model servers, or a ChatGPT subscription.

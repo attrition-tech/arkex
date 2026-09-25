@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"sort"
 	"strings"
 	"testing"
@@ -83,7 +84,9 @@ func TestRequestTimingBoundaries(t *testing.T) {
 			if (err != nil) != (mode == "error") {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if count != 1 || got.Prepare < 0 || got.Dispatch < got.Prepare || got.Total < got.Dispatch || got.Connection < 0 || got.Connection > got.Dispatch {
+			// Connection accumulates across attempts; dispatch records only
+			// the first successful write, so it need not bound connection time.
+			if count != 1 || got.Prepare < 0 || got.Dispatch < got.Prepare || got.Total < got.Dispatch || got.Connection < 0 || got.Connection > got.Total {
 				t.Fatalf("bad boundaries: %+v count=%d", got, count)
 			}
 			if mode == "error" || mode == "empty" {
@@ -97,6 +100,24 @@ func TestRequestTimingBoundaries(t *testing.T) {
 				t.Fatalf("reasoning includes initial wait: %+v %+v", reasoning, got)
 			}
 		})
+	}
+}
+
+func TestRequestTimingAccumulatesConnectionsAcrossAttempts(t *testing.T) {
+	ctx, timing := traceRequest(t.Context(), time.Now())
+	trace := httptrace.ContextClientTrace(ctx)
+	trace.GetConn("first")
+	trace.GotConn(httptrace.GotConnInfo{})
+	trace.WroteRequest(httptrace.WroteRequestInfo{})
+	firstDispatch, firstConnection := timing()
+
+	trace.GetConn("second")
+	time.Sleep(firstDispatch + time.Millisecond)
+	trace.GotConn(httptrace.GotConnInfo{})
+	trace.WroteRequest(httptrace.WroteRequestInfo{})
+	dispatch, connection := timing()
+	if dispatch != firstDispatch || connection <= firstConnection || connection <= dispatch {
+		t.Fatalf("dispatch must stay at first write while connection accumulates: first=(%s, %s), final=(%s, %s)", firstDispatch, firstConnection, dispatch, connection)
 	}
 }
 

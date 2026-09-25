@@ -6,7 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/dantearo/arkex/internal/agent"
+	"github.com/attrition-tech/arkex/internal/agent"
 )
 
 // targetFPS is the renderer's frame cap (Bubble Tea's maximum) and the rate

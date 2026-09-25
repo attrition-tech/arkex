@@ -9,8 +9,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/dantearo/arkex/internal/agent"
-	"github.com/dantearo/arkex/internal/sanitize"
+	"github.com/attrition-tech/arkex/internal/agent"
+	"github.com/attrition-tech/arkex/internal/sanitize"
 )
 
 // Runner runs one prompt and streams events; *agent.Agent implements it.

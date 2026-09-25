@@ -11,8 +11,8 @@ import (
 
 	glamouransi "charm.land/glamour/v2/ansi"
 	"charm.land/lipgloss/v2"
+	"github.com/attrition-tech/arkex/internal/sanitize"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/dantearo/arkex/internal/sanitize"
 )
 
 // Banner is the Arkex wordmark used by the update command.

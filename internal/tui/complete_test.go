@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dantearo/arkex/internal/agent"
+	"github.com/attrition-tech/arkex/internal/agent"
 )
 
 func TestWordAt(t *testing.T) {

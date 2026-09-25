@@ -11,7 +11,7 @@ import (
 	"charm.land/glamour/v2/styles"
 	"charm.land/lipgloss/v2"
 
-	"github.com/dantearo/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/config"
 )
 
 // Theme is the set of colour roles every style in the TUI is built from.

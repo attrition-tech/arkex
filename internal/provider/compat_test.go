@@ -6,7 +6,7 @@ import (
 
 	"charm.land/fantasy/providers/openai"
 
-	"github.com/dantearo/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/config"
 )
 
 func TestOpenAICompatOptions(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/dantearo/arkex/internal/tools"
+	"github.com/attrition-tech/arkex/internal/tools"
 	"mvdan.cc/sh/v3/syntax"
 )
 

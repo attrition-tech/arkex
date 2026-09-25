@@ -7,7 +7,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/dantearo/arkex/internal/session"
+	"github.com/attrition-tech/arkex/internal/session"
 )
 
 type sessionConnectedMsg struct {

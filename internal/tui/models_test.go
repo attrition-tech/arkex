@@ -10,7 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/dantearo/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/config"
 )
 
 // panelModel returns a model whose global config lives in a temp ARKEX_HOME

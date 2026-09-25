@@ -15,8 +15,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/dantearo/arkex/internal/chatgpt"
-	"github.com/dantearo/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/chatgpt"
+	"github.com/attrition-tech/arkex/internal/config"
 )
 
 func TestLegacySubscriptionEditKeepsProvider(t *testing.T) {

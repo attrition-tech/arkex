@@ -11,7 +11,7 @@ import (
 
 	"github.com/gofrs/flock"
 
-	"github.com/dantearo/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/config"
 )
 
 // Store is the token file: ~/.arkex/auth.json, mode 0600, one entry per

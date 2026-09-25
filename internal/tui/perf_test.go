@@ -11,8 +11,8 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/dantearo/arkex/internal/agent"
-	"github.com/dantearo/arkex/internal/provider"
+	"github.com/attrition-tech/arkex/internal/agent"
+	"github.com/attrition-tech/arkex/internal/provider"
 )
 
 // ---- scroller ----

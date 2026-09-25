@@ -4,7 +4,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/dantearo/arkex/internal/provider"
+	"github.com/attrition-tech/arkex/internal/provider"
 )
 
 func (m *model) effortLabel() string {

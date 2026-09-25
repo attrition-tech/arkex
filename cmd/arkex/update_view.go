@@ -11,8 +11,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/term"
 
-	"github.com/dantearo/arkex/internal/sanitize"
-	"github.com/dantearo/arkex/internal/tui"
+	"github.com/attrition-tech/arkex/internal/sanitize"
+	"github.com/attrition-tech/arkex/internal/tui"
 )
 
 // updateView is a single in-place download row, not a full-screen program.

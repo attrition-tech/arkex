@@ -9,7 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/dantearo/arkex/internal/agent"
+	"github.com/attrition-tech/arkex/internal/agent"
 )
 
 // The footer is everything under the transcript:

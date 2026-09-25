@@ -10,9 +10,9 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/dantearo/arkex/internal/agent"
-	"github.com/dantearo/arkex/internal/session"
-	"github.com/dantearo/arkex/internal/tools"
+	"github.com/attrition-tech/arkex/internal/agent"
+	"github.com/attrition-tech/arkex/internal/session"
+	"github.com/attrition-tech/arkex/internal/tools"
 )
 
 func TestHistoryNavigation(t *testing.T) {

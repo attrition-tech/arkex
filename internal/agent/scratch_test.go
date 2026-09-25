@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dantearo/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/config"
 )
 
 func TestScratchBoundaryAndModes(t *testing.T) {

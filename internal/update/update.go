@@ -41,7 +41,7 @@ import (
 )
 
 // DefaultBaseURL is the release host baked into official builds via
-// -ldflags "-X github.com/dantearo/arkex/internal/update.DefaultBaseURL=https://…".
+// -ldflags "-X github.com/attrition-tech/arkex/internal/update.DefaultBaseURL=https://…".
 // Empty means "no update source configured".
 var DefaultBaseURL = ""
 

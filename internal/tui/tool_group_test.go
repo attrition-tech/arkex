@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"charm.land/fantasy"
+	"github.com/attrition-tech/arkex/internal/agent"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/dantearo/arkex/internal/agent"
 )
 
 func groupTool(name, path string) *block {

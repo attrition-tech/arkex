@@ -9,8 +9,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/dantearo/arkex/internal/sanitize"
-	"github.com/dantearo/arkex/internal/tools"
+	"github.com/attrition-tech/arkex/internal/sanitize"
+	"github.com/attrition-tech/arkex/internal/tools"
 )
 
 // A prompt starting with "!" runs as a shell command right away, without

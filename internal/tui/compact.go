@@ -8,8 +8,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/dantearo/arkex/internal/agent"
-	"github.com/dantearo/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/agent"
+	"github.com/attrition-tech/arkex/internal/config"
 )
 
 // compact is the manual /compact: it summarises the whole conversation in

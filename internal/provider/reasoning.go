@@ -5,7 +5,7 @@ import (
 	"slices"
 
 	"charm.land/fantasy"
-	"github.com/dantearo/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/config"
 )
 
 // ReasoningControls prefers persisted discovery/manual metadata, then known

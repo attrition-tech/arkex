@@ -9,8 +9,8 @@ import (
 	"strings"
 
 	"charm.land/fantasy"
-	"github.com/dantearo/arkex/internal/prompt"
-	"github.com/dantearo/arkex/internal/tools"
+	"github.com/attrition-tech/arkex/internal/prompt"
+	"github.com/attrition-tech/arkex/internal/tools"
 )
 
 // toolInstructions discovers guidance before an action, not after its side

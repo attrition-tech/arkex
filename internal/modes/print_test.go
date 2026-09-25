@@ -11,7 +11,7 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/dantearo/arkex/internal/agent"
+	"github.com/attrition-tech/arkex/internal/agent"
 )
 
 // scripted replays a fixed event list and returns err from Run.

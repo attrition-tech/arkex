@@ -9,8 +9,8 @@ import (
 	"charm.land/fantasy"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/dantearo/arkex/internal/agent"
-	"github.com/dantearo/arkex/internal/session"
+	"github.com/attrition-tech/arkex/internal/agent"
+	"github.com/attrition-tech/arkex/internal/session"
 )
 
 func TestTerminalTitleFollowsSession(t *testing.T) {

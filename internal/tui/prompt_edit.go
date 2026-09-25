@@ -6,9 +6,9 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/fantasy"
+	"github.com/attrition-tech/arkex/internal/sanitize"
+	"github.com/attrition-tech/arkex/internal/session"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/dantearo/arkex/internal/sanitize"
-	"github.com/dantearo/arkex/internal/session"
 )
 
 type promptEdit struct {

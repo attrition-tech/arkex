@@ -25,7 +25,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dantearo/arkex/internal/update"
+	"github.com/attrition-tech/arkex/internal/update"
 )
 
 func main() {

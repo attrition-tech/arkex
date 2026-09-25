@@ -13,9 +13,9 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/dantearo/arkex/internal/config"
-	"github.com/dantearo/arkex/internal/provider"
-	"github.com/dantearo/arkex/internal/tools"
+	"github.com/attrition-tech/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/provider"
+	"github.com/attrition-tech/arkex/internal/tools"
 )
 
 func TestAssumedContextThreshold(t *testing.T) {

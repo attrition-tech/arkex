@@ -15,15 +15,15 @@ import (
 	"github.com/charmbracelet/fang"
 	"github.com/spf13/cobra"
 
-	"github.com/dantearo/arkex/internal/agent"
-	"github.com/dantearo/arkex/internal/config"
-	"github.com/dantearo/arkex/internal/modes"
-	"github.com/dantearo/arkex/internal/prompt"
-	"github.com/dantearo/arkex/internal/provider"
-	"github.com/dantearo/arkex/internal/scratch"
-	"github.com/dantearo/arkex/internal/session"
-	"github.com/dantearo/arkex/internal/tools"
-	"github.com/dantearo/arkex/internal/tui"
+	"github.com/attrition-tech/arkex/internal/agent"
+	"github.com/attrition-tech/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/modes"
+	"github.com/attrition-tech/arkex/internal/prompt"
+	"github.com/attrition-tech/arkex/internal/provider"
+	"github.com/attrition-tech/arkex/internal/scratch"
+	"github.com/attrition-tech/arkex/internal/session"
+	"github.com/attrition-tech/arkex/internal/tools"
+	"github.com/attrition-tech/arkex/internal/tui"
 )
 
 // Set by goreleaser via -ldflags.

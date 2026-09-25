@@ -5,8 +5,8 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/attrition-tech/arkex/internal/agent"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/dantearo/arkex/internal/agent"
 )
 
 func TestUserMessageHasHalfTheOuterMargin(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/dantearo/arkex/internal/update"
+	"github.com/attrition-tech/arkex/internal/update"
 )
 
 func newUpdateCmd() *cobra.Command {

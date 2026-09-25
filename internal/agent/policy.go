@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/dantearo/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/config"
 )
 
 // Decision is the outcome of a policy check.

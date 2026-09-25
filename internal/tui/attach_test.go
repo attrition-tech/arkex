@@ -10,7 +10,7 @@ import (
 	"charm.land/fantasy"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/dantearo/arkex/internal/agent"
+	"github.com/attrition-tech/arkex/internal/agent"
 )
 
 // tiny 1×1 PNG.

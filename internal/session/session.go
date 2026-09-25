@@ -22,8 +22,8 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/dantearo/arkex/internal/config"
-	"github.com/dantearo/arkex/internal/fileutil"
+	"github.com/attrition-tech/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/fileutil"
 )
 
 // Session is one conversation and the state needed to continue it.

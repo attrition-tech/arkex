@@ -11,7 +11,7 @@ import (
 	"charm.land/fantasy/providers/openaicompat"
 	oai "github.com/openai/openai-go/v3"
 
-	"github.com/dantearo/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/config"
 )
 
 // UserAgent is sent on every request so server operators can identify arkex.

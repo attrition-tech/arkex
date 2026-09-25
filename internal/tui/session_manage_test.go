@@ -10,7 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/fantasy"
 
-	"github.com/dantearo/arkex/internal/session"
+	"github.com/attrition-tech/arkex/internal/session"
 )
 
 func savedManagedSession(t *testing.T, m *model) *session.Session {

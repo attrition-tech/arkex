@@ -16,10 +16,10 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/dantearo/arkex/internal/agent"
-	"github.com/dantearo/arkex/internal/config"
-	"github.com/dantearo/arkex/internal/provider"
-	"github.com/dantearo/arkex/internal/tools"
+	"github.com/attrition-tech/arkex/internal/agent"
+	"github.com/attrition-tech/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/provider"
+	"github.com/attrition-tech/arkex/internal/tools"
 )
 
 // fakeLM is an OpenAI-compatible chat endpoint answering from a script, one

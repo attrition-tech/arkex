@@ -13,9 +13,9 @@ import (
 
 	"charm.land/fantasy"
 
-	"github.com/dantearo/arkex/internal/config"
-	"github.com/dantearo/arkex/internal/provider"
-	"github.com/dantearo/arkex/internal/tools"
+	"github.com/attrition-tech/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/provider"
+	"github.com/attrition-tech/arkex/internal/tools"
 )
 
 // toolCallTurn scripts one model turn that asks to read hello.txt.

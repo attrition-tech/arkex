@@ -14,11 +14,11 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/dantearo/arkex/internal/agent"
-	"github.com/dantearo/arkex/internal/chatgpt"
-	"github.com/dantearo/arkex/internal/config"
-	"github.com/dantearo/arkex/internal/setup"
-	"github.com/dantearo/arkex/internal/tools"
+	"github.com/attrition-tech/arkex/internal/agent"
+	"github.com/attrition-tech/arkex/internal/chatgpt"
+	"github.com/attrition-tech/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/setup"
+	"github.com/attrition-tech/arkex/internal/tools"
 )
 
 // The Connections panel: what arkex can talk to, and the knobs to change

@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/dantearo/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/config"
 )
 
 // scriptedAsker answers each prompt with the next scripted Answer and

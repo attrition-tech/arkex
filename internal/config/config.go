@@ -14,7 +14,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dantearo/arkex/internal/tools"
+	"github.com/attrition-tech/arkex/internal/tools"
 )
 
 // Kind says what a connection is, which decides how it is set up and shown:

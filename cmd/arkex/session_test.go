@@ -8,8 +8,8 @@ import (
 	"testing"
 
 	"charm.land/fantasy"
-	"github.com/dantearo/arkex/internal/config"
-	"github.com/dantearo/arkex/internal/session"
+	"github.com/attrition-tech/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/session"
 )
 
 func TestPrintResumeUsesSavedModelUnlessOverridden(t *testing.T) {

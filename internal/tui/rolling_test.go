@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/attrition-tech/arkex/internal/agent"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/dantearo/arkex/internal/agent"
 )
 
 func rollingModel(t testing.TB, n int) *model {

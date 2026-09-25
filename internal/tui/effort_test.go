@@ -5,11 +5,11 @@ import (
 	"testing"
 
 	"charm.land/fantasy"
-	"github.com/dantearo/arkex/internal/agent"
-	"github.com/dantearo/arkex/internal/chatgpt"
-	"github.com/dantearo/arkex/internal/config"
-	"github.com/dantearo/arkex/internal/provider"
-	"github.com/dantearo/arkex/internal/session"
+	"github.com/attrition-tech/arkex/internal/agent"
+	"github.com/attrition-tech/arkex/internal/chatgpt"
+	"github.com/attrition-tech/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/provider"
+	"github.com/attrition-tech/arkex/internal/session"
 )
 
 func effortModel(t *testing.T) *model {

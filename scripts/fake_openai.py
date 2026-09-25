@@ -221,7 +221,7 @@ class Handler(BaseHTTPRequestHandler):
                 chunk({}, "tool_calls"),
             ]
         else:
-            text = "Here is what I found:\n\n- module `github.com/dantearo/arkex`\n- Go 1.27\n\nDone."
+            text = "Here is what I found:\n\n- module `github.com/attrition-tech/arkex`\n- Go 1.27\n\nDone."
             parts = [chunk({"role": "assistant", "content": w + " "}) for w in text.split(" ")]
             parts.append(chunk({}, "stop"))
 

@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/dantearo/arkex/internal/session"
+	"github.com/attrition-tech/arkex/internal/session"
 )
 
 // maxHistory bounds the prompt history kept per directory.

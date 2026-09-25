@@ -1,4 +1,4 @@
-module github.com/dantearo/arkex
+module github.com/attrition-tech/arkex
 
 go 1.27.1
 

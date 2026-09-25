@@ -8,9 +8,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/fantasy"
 
-	"github.com/dantearo/arkex/internal/agent"
-	"github.com/dantearo/arkex/internal/sanitize"
-	"github.com/dantearo/arkex/internal/session"
+	"github.com/attrition-tech/arkex/internal/agent"
+	"github.com/attrition-tech/arkex/internal/sanitize"
+	"github.com/attrition-tech/arkex/internal/session"
 )
 
 const recentSessions = 5

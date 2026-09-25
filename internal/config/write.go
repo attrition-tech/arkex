@@ -8,7 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/dantearo/arkex/internal/fileutil"
+	"github.com/attrition-tech/arkex/internal/fileutil"
 )
 
 // The editors below change one config file in place. They work on generic

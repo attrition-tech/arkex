@@ -8,8 +8,8 @@ import (
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/openai"
 
-	"github.com/dantearo/arkex/internal/chatgpt"
-	"github.com/dantearo/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/chatgpt"
+	"github.com/attrition-tech/arkex/internal/config"
 )
 
 // AuthStore is where subscription sign-ins are read from. Tests point it

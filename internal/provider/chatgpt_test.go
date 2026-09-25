@@ -15,8 +15,8 @@ import (
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/openai"
 
-	"github.com/dantearo/arkex/internal/chatgpt"
-	"github.com/dantearo/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/chatgpt"
+	"github.com/attrition-tech/arkex/internal/config"
 )
 
 const fakeStream = `event: response.created

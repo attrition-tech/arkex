@@ -44,7 +44,7 @@ builds:
       - -s -w
       - -X main.version={{ .Version }}
       - -X main.commit={{ .ShortCommit }}
-      - -X github.com/dantearo/arkex/internal/update.DefaultBaseURL={{ .Env.ARKEX_DOWNLOAD_BASE }}
+      - -X github.com/attrition-tech/arkex/internal/update.DefaultBaseURL={{ .Env.ARKEX_DOWNLOAD_BASE }}
     mod_timestamp: "{{ .CommitTimestamp }}"
 
 archives:

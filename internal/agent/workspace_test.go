@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dantearo/arkex/internal/config"
-	"github.com/dantearo/arkex/internal/tools"
+	"github.com/attrition-tech/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/tools"
 )
 
 func TestWorkspaceExplicitDeniesInEveryMode(t *testing.T) {

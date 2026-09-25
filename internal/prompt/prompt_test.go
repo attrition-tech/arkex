@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dantearo/arkex/internal/tools"
+	"github.com/attrition-tech/arkex/internal/tools"
 )
 
 func TestPlanNoteUsesRegisteredTools(t *testing.T) {

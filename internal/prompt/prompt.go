@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dantearo/arkex/internal/tools"
+	"github.com/attrition-tech/arkex/internal/tools"
 )
 
 const core = `You are arkex, a coding agent running in the user's terminal.

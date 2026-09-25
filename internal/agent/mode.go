@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/dantearo/arkex/internal/tools"
+	"github.com/attrition-tech/arkex/internal/tools"
 )
 
 // Mode is the user's current risk posture. It wraps the configured

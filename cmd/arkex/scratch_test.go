@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/dantearo/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/config"
 )
 
 // Exercise the CLI entry point, real HTTP adapter, policy, file tools and shell.

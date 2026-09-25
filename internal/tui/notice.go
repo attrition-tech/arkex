@@ -7,8 +7,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/attrition-tech/arkex/internal/sanitize"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/dantearo/arkex/internal/sanitize"
 )
 
 const flashDelay = 5 * time.Second

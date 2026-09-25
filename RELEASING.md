@@ -3,7 +3,7 @@
 Signed releases are static files on Cloudflare R2 at `https://get.arkex.dev`.
 `install.sh` and `arkex update` continue to use that host. Source and release
 downloads are also published at `https://github.com/attrition-tech/arkex`.
-The Go module path remains unchanged so existing imports keep working.
+The Go module path is `github.com/attrition-tech/arkex`, matching the source repository.
 
 ## Layout on the host
 

@@ -17,8 +17,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dantearo/arkex/internal/chatgpt"
-	"github.com/dantearo/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/chatgpt"
+	"github.com/attrition-tech/arkex/internal/config"
 )
 
 // Preset pre-fills the add form for a known service. Each connection kind

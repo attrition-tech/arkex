@@ -98,8 +98,14 @@ func newApproval(call agent.ToolCall, reply chan agent.Answer) *approval {
 		}
 	}
 	if call.TrustDirectory != "" {
-		a.preview = sanitize.Terminal(call.Reason) + "\nTrust directory: " + sanitize.Terminal(call.TrustDirectory) +
+		a.preview = "Trust directory: " + sanitize.Terminal(call.TrustDirectory) +
 			"\nAccess: " + call.TrustAccess + "\nIncludes descendants; expires when arkex exits.\n" + a.preview
+		if a.caption == "" {
+			a.caption = "Approval details"
+		}
+	}
+	if call.Reason != "" && (call.TrustDirectory != "" || strings.ContainsAny(call.Reason, "\n\r")) {
+		a.preview = sanitize.Terminal(call.Reason) + "\n" + a.preview
 		if a.caption == "" {
 			a.caption = "Approval details"
 		}
@@ -193,7 +199,11 @@ func (m *model) approvalView() string {
 				lines = append(lines, "  "+line)
 			}
 		} else {
-			lines = append(lines, "  "+gaugeWarnStyle.Render("⚠ ")+ansi.Truncate(sanitize.Terminal(call.Reason), inner-4, "…"))
+			// Truncate limits columns, not embedded newlines. Keep this
+			// summary physically one row; full multiline reasons live in
+			// the scrollable preview so actions remain reachable.
+			reason := strings.Join(strings.Fields(sanitize.Terminal(call.Reason)), " ")
+			lines = append(lines, "  "+gaugeWarnStyle.Render("⚠ ")+ansi.Truncate(reason, max(1, inner-4), "…"))
 		}
 	}
 	if call.TrustDirectory != "" && m.height > 20 {

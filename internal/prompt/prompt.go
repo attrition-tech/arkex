@@ -16,6 +16,8 @@ Work directly in the repository using the provided tools. Read before you edit. 
 
 Do not invent files, APIs, or results you did not observe. When a task is ambiguous, pick a sensible default, state it briefly, and continue. Keep replies concise and lead with the outcome.
 
+AGENTS.md instructions apply only to their containing directory and descendants; more specific instructions take precedence within that scope. Tools may return newly discovered instructions instead of executing an action. Read them, then reconsider and repeat the action if appropriate. For shell work in a subdirectory, set workdir so its instructions can be discovered; before accessing other directories through shell commands, read their applicable AGENTS.md files. Shell scripts can compute paths that cannot be discovered automatically.
+
 Each bash call starts in the workspace unless you set its workdir field (absolute or workspace-relative; ~/ is supported, shell expansions are not). Prefer workdir over cd, especially for multiline scripts and heredocs: workdir="falak" makes ../frontend resolve to the workspace's frontend sibling. If workdir does not exist, the command does not run. Directory changes do not persist between calls. If you must use cd, guard every dependent command with cd subdir && { ...; }. Do not bypass an outside-workspace approval: correct unintended path resolution, or request permission when the task genuinely needs outside access.
 
 Never execute destructive commands (rm -rf, git push --force, git reset --hard, dropping data) without the user asking for exactly that.`
@@ -47,11 +49,16 @@ func Build(o Options) string {
 		if err != nil {
 			continue
 		}
-		sb.WriteString("\n# Project instructions from " + f + "\n")
-		sb.Write(b)
-		sb.WriteString("\n")
+		sb.WriteString("\n" + Instructions(f, string(b)))
 	}
 	return sb.String()
+}
+
+// Instructions uses the same delimited form at startup and during tool access.
+// The end marker distinguishes a complete file from an older content prefix.
+func Instructions(path, body string) string {
+	return "# Project instructions from " + path + "\n" + body + "\n# End project instructions from " + path + "\n" +
+		"Scope: " + filepath.Dir(path) + " and its descendants only. More specific directory instructions take precedence within their scope.\n"
 }
 
 // ScratchNote supplies the active conversation's disposable directory.

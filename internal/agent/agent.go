@@ -413,6 +413,14 @@ func (a *Agent) runOne(ctx context.Context, call ToolCall, emit func(Event)) (to
 		return tools.Result{Output: out}, true, nil
 	}
 
+	if instructions, err := a.toolInstructions(ctx, tool, input); err != nil {
+		emit(ToolResult{ID: call.ID, Name: call.Name, Output: err.Error(), IsError: true})
+		return tools.Result{Output: err.Error()}, true, nil
+	} else if instructions != "" {
+		emit(ToolResult{ID: call.ID, Name: call.Name, Output: instructions})
+		return tools.Result{Output: instructions}, false, nil
+	}
+
 	start := time.Now()
 	res, runErr := tool.Run(ctx, input)
 	dur := time.Since(start)

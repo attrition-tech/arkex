@@ -275,7 +275,7 @@ func TestModePolicyOutsideReadAsksOncePerDirectory(t *testing.T) {
 	if ask.calls[0].Reason != "reads outside the workspace: ~/lib/a.go" {
 		t.Fatalf("reason = %q", ask.calls[0].Reason)
 	}
-	d, _ := p.Decide(ctx, ToolCall{Name: "grep", Input: `{"pattern":"x","path":"~/lib/sub/b.go"}`})
+	d, _ := p.Decide(ctx, ToolCall{Name: "read", Input: `{"path":"~/lib/sub/b.go"}`})
 	if !d.Allowed || len(ask.calls) != 1 {
 		t.Fatalf("grant should cover the subtree: %+v asks=%d", d, len(ask.calls))
 	}

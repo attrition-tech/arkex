@@ -89,6 +89,27 @@ func Default(dir string) *Registry {
 	)
 }
 
+// builtinCatalog shares the registration source with executable registries.
+// Its instances are used only for metadata, never execution.
+var builtinCatalog = Default("")
+
+// IsBuiltin reports whether name is registered as a built-in tool.
+func IsBuiltin(name string) bool {
+	_, ok := builtinCatalog.Get(name)
+	return ok
+}
+
+// IsReadOnly reports the built-in tool's declared capability. Tools without
+// an explicit read-only declaration, including unknown names, fail closed.
+func IsReadOnly(name string) bool {
+	t, ok := builtinCatalog.Get(name)
+	if !ok {
+		return false
+	}
+	ro, ok := t.(interface{ ReadOnly() bool })
+	return ok && ro.ReadOnly()
+}
+
 // decode unmarshals input into v with unknown-field rejection so a model
 // hallucinating argument names gets a clear error instead of silent defaults.
 func decode(input json.RawMessage, v any) error {

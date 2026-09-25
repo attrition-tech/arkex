@@ -2,8 +2,59 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
+
+	"github.com/dantearo/arkex/internal/config"
+	"github.com/dantearo/arkex/internal/prompt"
+	"github.com/dantearo/arkex/internal/tools"
 )
+
+func TestToolCapabilitiesAgreeAcrossPolicyAndPrompt(t *testing.T) {
+	p := NewModePolicy(ModePlan, AllowAll{})
+	cfg := &config.Config{}
+	for _, tc := range []struct {
+		name                 string
+		registered, readOnly bool
+	}{
+		{"read", true, true},
+		{"write", true, false},
+		{"edit", true, false},
+		{"bash", true, false},
+		{"grep", false, false},
+		{"find", false, false},
+		{"ls", false, false},
+		{"future-tool", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tools.IsBuiltin(tc.name) != tc.registered || tools.IsReadOnly(tc.name) != tc.readOnly {
+				t.Fatal("incorrect registered capability")
+			}
+			d, err := p.Decide(context.Background(), ToolCall{Name: tc.name})
+			if err != nil || d.Allowed != tc.readOnly {
+				t.Fatalf("plan decision: %+v, %v", d, err)
+			}
+			want := config.PermissionAsk
+			if tc.readOnly {
+				want = config.PermissionAllow
+			}
+			if got := cfg.Permission(tc.name); got != want {
+				t.Fatalf("default permission %v, want %v", got, want)
+			}
+			if tc.registered {
+				tool, _ := tools.Default("").Get(tc.name)
+				note := prompt.PlanNote(tools.NewRegistry(tool))
+				label := "Registered tools refused by this mode: "
+				if tc.readOnly {
+					label = "Read-only tools permitted by this mode: "
+				}
+				if !strings.Contains(note, label+tc.name+".") {
+					t.Fatalf("prompt disagrees with policy: %s", note)
+				}
+			}
+		})
+	}
+}
 
 type recordPolicy struct{ calls int }
 

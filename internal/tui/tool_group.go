@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/dantearo/arkex/internal/sanitize"
+	"github.com/dantearo/arkex/internal/tools"
 )
 
 // Groups are a view of adjacent calls, never a change to conversation history.
@@ -23,11 +24,7 @@ func (m *model) groupable(b *block) bool {
 	if m.pending != nil && m.pending.call.ID == b.id {
 		return false
 	}
-	switch b.name {
-	case "read", "write", "edit", "bash", "grep", "find", "ls":
-		return true
-	}
-	return false
+	return tools.IsBuiltin(b.name)
 }
 
 func (m *model) toolGroupEnd(start int) int {

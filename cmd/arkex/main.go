@@ -231,7 +231,7 @@ func runRoot(ctx context.Context, f rootFlags, args []string) error {
 			return err
 		}
 		if modePolicy.Mode() == agent.ModePlan {
-			ag.System += prompt.PlanNote
+			ag.System += prompt.PlanNote(ag.Tools)
 		}
 		// --continue/--resume in print mode: load the saved conversation,
 		// answer, and save it back. Plain one-shot runs are not persisted.

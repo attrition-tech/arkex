@@ -53,7 +53,8 @@ type readInput struct {
 	Limit  int    `json:"limit,omitempty"`
 }
 
-func (*Read) Name() string { return "read" }
+func (*Read) Name() string   { return "read" }
+func (*Read) ReadOnly() bool { return true }
 func (*Read) Description() string {
 	return "Read a text file. Returns numbered lines. Use offset (1-based line) and limit for large files."
 }

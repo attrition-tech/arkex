@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/dantearo/arkex/internal/config"
+	"github.com/dantearo/arkex/internal/tools"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -108,7 +108,7 @@ func (s *Scope) classifyPaths(call ToolCall) (Reach, []string) {
 	if s.inside(abs) {
 		return ReachInside, nil
 	}
-	if config.IsReadOnly(call.Name) {
+	if tools.IsReadOnly(call.Name) {
 		return ReachOutsideRead, []string{s.display(abs)}
 	}
 	return ReachOutsideWrite, []string{s.display(abs)}

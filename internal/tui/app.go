@@ -955,7 +955,7 @@ func (m *model) prepareAgent() error {
 	ag := m.sess.Agent
 	ag.System = m.baseSystem
 	if m.mode() == agent.ModePlan {
-		ag.System += prompt.PlanNote
+		ag.System += prompt.PlanNote(ag.Tools)
 	}
 	if m.o.Prepare != nil {
 		return m.o.Prepare(ag, m.conv.ID)

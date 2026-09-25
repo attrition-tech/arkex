@@ -6,7 +6,30 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dantearo/arkex/internal/tools"
 )
+
+func TestPlanNoteUsesRegisteredTools(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		registry         *tools.Registry
+		allowed, refused string
+	}{
+		{"default", tools.Default(""), "read", "write, edit, bash"},
+		{"subset", tools.NewRegistry(&tools.Bash{}, &tools.Read{}), "read", "bash"},
+		{"mutating only", tools.NewRegistry(&tools.Edit{}), "none", "edit"},
+		{"empty", nil, "none", "none"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := PlanNote(tc.registry)
+			want := "Read-only tools permitted by this mode: " + tc.allowed + ". Registered tools refused by this mode: " + tc.refused + "."
+			if !strings.Contains(got, want) {
+				t.Fatalf("want %q in %q", want, got)
+			}
+		})
+	}
+}
 
 func write(t *testing.T, path, content string) {
 	t.Helper()

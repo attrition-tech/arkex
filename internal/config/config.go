@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/dantearo/arkex/internal/tools"
 )
 
 // Kind says what a connection is, which decides how it is set up and shown:
@@ -393,18 +395,8 @@ func (c *Config) Permission(tool string) Permission {
 	if p, ok := c.Permissions[tool]; ok {
 		return p
 	}
-	if IsReadOnly(tool) {
+	if tools.IsReadOnly(tool) {
 		return PermissionAllow
 	}
 	return PermissionAsk
-}
-
-// IsReadOnly reports whether a built-in tool cannot change files or run
-// commands. Plan mode permits only these.
-func IsReadOnly(tool string) bool {
-	switch tool {
-	case "read", "grep", "find", "ls":
-		return true
-	}
-	return false
 }

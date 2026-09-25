@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/dantearo/arkex/internal/config"
+	"github.com/dantearo/arkex/internal/tools"
 )
 
 // Mode is the user's current risk posture. It wraps the configured
@@ -100,7 +100,7 @@ func (p *ModePolicy) Decide(ctx context.Context, call ToolCall) (Decision, error
 	if denies, ok := base.(interface{ Denies(string) bool }); ok && denies.Denies(call.Name) {
 		return Decision{Allowed: false, Reason: "denied by config"}, nil
 	}
-	if mode == ModePlan && !config.IsReadOnly(call.Name) {
+	if mode == ModePlan && !tools.IsReadOnly(call.Name) {
 		return Decision{Allowed: false, Reason: "plan mode permits only read-only tools; ask the user to switch to build mode"}, nil
 	}
 

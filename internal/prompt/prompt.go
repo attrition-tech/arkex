@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/dantearo/arkex/internal/tools"
 )
 
 const core = `You are arkex, a coding agent running in the user's terminal.
@@ -18,7 +20,7 @@ Do not invent files, APIs, or results you did not observe. When a task is ambigu
 
 AGENTS.md instructions apply only to their containing directory and descendants; more specific instructions take precedence within that scope. Tools may return newly discovered instructions instead of executing an action. Read them, then reconsider and repeat the action if appropriate. For shell work in a subdirectory, set workdir so its instructions can be discovered; before accessing other directories through shell commands, read their applicable AGENTS.md files. Shell scripts can compute paths that cannot be discovered automatically.
 
-Each bash call starts in the workspace unless you set its workdir field (absolute or workspace-relative; ~/ is supported, shell expansions are not). Prefer workdir over cd, especially for multiline scripts and heredocs: workdir="falak" makes ../frontend resolve to the workspace's frontend sibling. If workdir does not exist, the command does not run. Directory changes do not persist between calls. If you must use cd, guard every dependent command with cd subdir && { ...; }. Do not bypass an outside-workspace approval: correct unintended path resolution, or request permission when the task genuinely needs outside access.
+Each bash call starts in the workspace unless you set its workdir field (absolute or workspace-relative; ~/ is supported, shell expansions are not). Prefer workdir over cd, especially for multiline scripts and heredocs. Relative paths in the command resolve from workdir. If workdir does not exist, the command does not run. Directory changes do not persist between calls. If you must use cd, guard every dependent command with cd subdir && { ...; }. Do not bypass an outside-workspace approval: correct unintended path resolution, or request permission when the task genuinely needs outside access.
 
 Never execute destructive commands (rm -rf, git push --force, git reset --hard, dropping data) without the user asking for exactly that.`
 
@@ -69,11 +71,29 @@ func ScratchNote(dir string) string {
 	return "\n\n# Temporary files\nYour temporary workspace is " + dir + ". Use this exact absolute path for disposable scripts, downloads, logs, and intermediate output. Keep project changes and user deliverables in the working directory. This folder is private to this conversation during this Arkex run; old scratch paths in resumed history may no longer exist. Do not rely on temporary files surviving a restart. Do not modify or delete other sessions' or applications' temporary files. Arkex cleans its owned scratch folders on normal exit. Bash receives TMPDIR, TMP and TEMP pointing here. This scratch folder does not require an outside-workspace approval, but access still follows the current mode and configured permissions; it does not bypass Plan mode or explicit denies.\n"
 }
 
-// PlanNote is appended to the system prompt while the user is in plan mode.
-const PlanNote = `
-
-# Mode: plan
-The user has put you in plan mode. Only read-only tools (read, grep, find, ls) will run; edit, write and bash are refused. Investigate the code and reply with a concrete plan: which files change, what changes, how to verify, and the open questions. Do not attempt edits or commands. If the user wants the plan carried out, tell them to switch to build mode.`
+// PlanNote derives available names from the actual registry and the same
+// capability metadata used by permissions. It does not grant permission.
+func PlanNote(registry *tools.Registry) string {
+	var allowed, refused []string
+	if registry != nil {
+		for _, tool := range registry.All() {
+			if tools.IsReadOnly(tool.Name()) {
+				allowed = append(allowed, tool.Name())
+			} else {
+				refused = append(refused, tool.Name())
+			}
+		}
+	}
+	list := func(names []string) string {
+		if len(names) == 0 {
+			return "none"
+		}
+		return strings.Join(names, ", ")
+	}
+	return "\n\n# Mode: plan\nThe user has put you in plan mode. Read-only tools permitted by this mode: " + list(allowed) +
+		". Registered tools refused by this mode: " + list(refused) +
+		". Configured denies and workspace access rules still apply. Investigate with the available read-only tools and reply with a concrete plan: which files change, what changes, how to verify, and the open questions. Do not attempt edits or commands. If the user wants the plan carried out, tell them to switch to build mode."
+}
 
 // AgentsFiles returns AGENTS.md paths from the filesystem root down to cwd
 // (outermost first), stopping at the git repository root if one is found.

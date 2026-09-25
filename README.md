@@ -31,6 +31,11 @@ Configuration and sessions stay in `~/.arkex/`. API keys can reference environme
 variables instead of being stored directly, for example `"apiKey": "$MY_API_KEY"`.
 Prompts and relevant project content are sent to the model provider you choose.
 
+For terminal sound/visual alerts, add `"ui": {"bell": true}` to your config.
+Alerts fire when approval or retry input is needed, and when a run completes,
+fails, or pauses—not when you cancel. Off by default; your terminal controls
+the sound and may need its bell enabled.
+
 ## Use
 
 ```sh

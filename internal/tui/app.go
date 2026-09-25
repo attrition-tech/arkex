@@ -481,7 +481,7 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 		}
 		m.status = ""
 		m.layout() // the box replaces the input and may be taller
-		return m, nil
+		return m, m.notificationBell()
 
 	case eventsMsg:
 		for _, e := range msg.events {
@@ -532,7 +532,11 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 		}
 		m.status = ""
 		m.refresh()
-		return m, m.finishPromptAction()
+		var bell tea.Cmd
+		if !errors.Is(msg.err, context.Canceled) {
+			bell = m.notificationBell()
+		}
+		return m, tea.Batch(m.finishPromptAction(), bell)
 	case compactDoneMsg:
 		return m, m.compactDone(msg)
 	case sessionTitleMsg:
@@ -1739,7 +1743,7 @@ func (m *model) windowTitle() string {
 	suffix := " - " + ansi.Truncate(dir, 20, "…") + " - arkex"
 	prefix := ""
 	if m.running {
-		prefix = loader(m.frame) + " "
+		prefix = m.activityIndicator() + " "
 	}
 	return prefix + ansi.Truncate(name, 64-ansi.StringWidth(prefix+suffix), "…") + suffix
 }

@@ -49,11 +49,40 @@ func loader(f int) string {
 	return dotFrames[f%loaderFrames]
 }
 
+// attention uses one dot per cell, moving gently through three heights.
+// Plain Unicode keeps the CLI and terminal title identical.
+func attention(frame int) string {
+	heights := [...]rune{'⠄', '⠄', '⠂', '⠁', '⠁', '⠂'}
+	var dots [5]rune
+	for i := range dots {
+		dots[i] = heights[(frame/2+len(heights)-i)%len(heights)]
+	}
+	return string(dots[:])
+}
+
+func (m *model) activityIndicator() string {
+	if m.pending != nil {
+		return attention(m.frame)
+	}
+	return loader(m.frame)
+}
+
+func (m *model) notificationBell() tea.Cmd {
+	if m.o.UI.Bell != nil && *m.o.UI.Bell {
+		return tea.Raw("\a")
+	}
+	return nil
+}
+
 // workingStrip is the full line at the given inner width: loader, activity,
 // and the step number on the right when it fits.
 func (m *model) workingStrip(width int) string {
 	act := m.activity()
-	left := toolStyle.Render(loader(m.frame)) + "  " + textStyle.Render(act)
+	mark := toolStyle.Render(m.activityIndicator())
+	if m.pending != nil {
+		mark = gaugeWarnStyle.Render(m.activityIndicator())
+	}
+	left := mark + "  " + textStyle.Render(act)
 	if m.step > 0 {
 		step := dimStyle.Render(fmt.Sprintf("step %d", m.step))
 		if gap := width - lipgloss.Width(left) - lipgloss.Width(step); gap >= 2 {

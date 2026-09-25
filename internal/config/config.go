@@ -171,6 +171,9 @@ type UI struct {
 	Mouse *bool `json:"mouse,omitempty"`
 	// Theme names a colour theme; empty means the default.
 	Theme string `json:"theme,omitempty"`
+	// Bell enables terminal notifications for attention and run completion.
+	// Off by default; the terminal controls the sound or visual alert.
+	Bell *bool `json:"bell,omitempty"`
 }
 
 // MouseOn reports the effective mouse setting.
@@ -298,6 +301,9 @@ func (c *Config) merge(o *Config) {
 	c.Version = CurrentVersion
 	if o.UI.Mouse != nil {
 		c.UI.Mouse = o.UI.Mouse
+	}
+	if o.UI.Bell != nil {
+		c.UI.Bell = o.UI.Bell
 	}
 	if o.UI.Theme != "" {
 		c.UI.Theme = o.UI.Theme

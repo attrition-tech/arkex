@@ -22,7 +22,7 @@ func groupText(m *model) string {
 func groupClick(t *testing.T, m *model, b *block, header bool) {
 	t.Helper()
 	for _, s := range m.spans {
-		if s.b == b && s.header == header {
+		if s.b == b && s.header == header && !s.workHeader {
 			m.vp.ScrollDown(s.top - m.vp.YOffset() - 2)
 			click(m, 5, s.top-m.vp.YOffset())
 			return

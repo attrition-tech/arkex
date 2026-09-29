@@ -53,13 +53,18 @@ func (m *model) workSectionsFrom(start int) []workSection {
 			sections = append(sections, m.liveSections(start+1, end)...)
 			break
 		}
-		// A trailing tool/reasoning block means there is no final answer yet.
+		cancelled := end > start+1 && m.blocks[end-1].kind == blockSystem &&
+			strings.TrimSpace(m.blocks[end-1].text.String()) == "cancelled"
+		// Fold up to the cancellation marker or final assistant answer. Without
+		// either, trailing tool/reasoning blocks still describe an incomplete run.
 		final := end - 1
-		for final > start && (m.blocks[final].kind == blockSystem ||
-			(m.blocks[final].kind == blockAssistant && strings.TrimSpace(m.blocks[final].text.String()) == "")) {
-			final--
+		if !cancelled {
+			for final > start && (m.blocks[final].kind == blockSystem ||
+				(m.blocks[final].kind == blockAssistant && strings.TrimSpace(m.blocks[final].text.String()) == "")) {
+				final--
+			}
 		}
-		if final > start+1 && m.blocks[final].kind == blockAssistant {
+		if final > start+1 && (cancelled || m.blocks[final].kind == blockAssistant) {
 			first := start + 1
 			unfinished := false
 			// Keep persistent errors, cancellation and compaction notices visible.

@@ -21,11 +21,13 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -299,6 +301,13 @@ func (c *Client) get(ctx context.Context, url string, limit int64, progress func
 	if hc == nil {
 		hc = &http.Client{Timeout: 5 * time.Minute}
 	}
+	// A retry must share the original client's timeout rather than receiving a
+	// fresh budget. This also leaves a caller's earlier context deadline intact.
+	if hc.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, hc.Timeout)
+		defer cancel()
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
@@ -308,6 +317,16 @@ func (c *Client) get(ctx context.Context, url string, limit int64, progress func
 	}
 	req.Header.Set("Cache-Control", "no-cache")
 	resp, err := hc.Do(req)
+	if err != nil && ctx.Err() == nil && isIPv6NetworkError(err) {
+		// Clone a standard transport so proxy, TLS, and caller-provided dial
+		// behavior are retained; only the retry's TCP address family changes.
+		// Unknown RoundTrippers cannot safely be rewritten and are left alone.
+		if retryClient, ok := ipv4RetryClient(hc); ok {
+			defer retryClient.CloseIdleConnections()
+			c.logf("IPv6 connection failed; retrying over IPv4")
+			resp, err = retryClient.Do(req.Clone(ctx))
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -328,6 +347,44 @@ func (c *Client) get(ctx context.Context, url string, limit int64, progress func
 		return nil, fmt.Errorf("GET %s: response larger than %d bytes", url, limit)
 	}
 	return body, nil
+}
+
+func isIPv6NetworkError(err error) bool {
+	var certificateErr *tls.CertificateVerificationError
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || errors.As(err, &certificateErr) {
+		return false
+	}
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) {
+		return false
+	}
+	address, ok := opErr.Addr.(*net.TCPAddr)
+	return ok && address.IP != nil && address.IP.To4() == nil
+}
+
+func ipv4RetryClient(hc *http.Client) (*http.Client, bool) {
+	rt := hc.Transport
+	if rt == nil {
+		rt = http.DefaultTransport
+	}
+	transport, ok := rt.(*http.Transport)
+	// Custom TLS/legacy dialers may bypass DialContext. Do not silently bypass
+	// their routing, authentication, or other caller-specific behavior.
+	//nolint:staticcheck // Detect the deprecated hook too; callers can still set it.
+	if !ok || transport.DialTLSContext != nil || transport.DialTLS != nil || (transport.DialContext == nil && transport.Dial != nil) {
+		return nil, false
+	}
+	clone := transport.Clone()
+	dial := transport.DialContext
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
+	}
+	clone.DialContext = func(ctx context.Context, _ string, address string) (net.Conn, error) {
+		return dial(ctx, "tcp4", address)
+	}
+	retry := *hc
+	retry.Transport = clone
+	return &retry, true
 }
 
 type progressReader struct {

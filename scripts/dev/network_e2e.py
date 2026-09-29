@@ -107,6 +107,19 @@ for mode in ["recover", "partial", "exhaust", "cancel", "partialcancel", "waitca
             assert observed["has_tool_result"], "completed tool result missing from retry"
             assert not observed["has_partial_history"], "failed response leaked into retry history"
             assert (home / "executions").read_text() == "X", "completed command ran more than once"
+            if canceled:
+                folded = screen()
+                assert "▸ Work · 1 command" in folded, folded
+                assert "TOOL_ONCE" not in folded, folded
+                capture(mode + "-folded")
+                row = next(i + 1 for i, line in enumerate(folded.splitlines()) if "▸ Work" in line)
+                tmux("send-keys", "-t", "test", "-l", f"\x1b[<0;6;{row}M\x1b[<0;6;{row}m")
+                opened = wait(lambda s: "▾ Work" in s and "bash" in s, "cancelled work did not open")
+                row = next(i + 1 for i, line in enumerate(opened.splitlines()) if "bash" in line)
+                tmux("send-keys", "-t", "test", "-l", f"\x1b[<0;8;{row}M\x1b[<0;8;{row}m")
+                opened = wait(lambda s: "command:" in s and "TOOL_ONCE" in s, "completed tool detail lost on cancel")
+                assert "cancelled" in opened, opened
+                capture(mode + "-expanded")
             if not canceled:
                 assert "UNFINISHED_NETWORK" not in screen(), "interrupted response remains visible"
                 assert "Interrupted response discarded" not in screen(), "successful retry polluted transcript"

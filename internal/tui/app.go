@@ -474,6 +474,17 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 	case runDoneMsg:
 		m.compacting = false
 		m.disarmConfirmation()
+		if errors.Is(msg.err, context.Canceled) {
+			// A tool may never produce a result after its context is cancelled.
+			// Preserve its card, but don't leave it looking active (or successful).
+			for i := len(m.blocks) - 1; i >= 0 && m.blocks[i].kind != blockUser; i-- {
+				if m.blocks[i].kind == blockTool && m.blocks[i].status == "running" {
+					m.blocks[i].status = "error"
+					m.blocks[i].summary = "cancelled"
+					m.blocks[i].output = "Cancelled before a tool result was received."
+				}
+			}
+		}
 		m.pending = nil
 		m.rollAt = time.Time{}
 		m.rollPaused = time.Time{}

@@ -100,10 +100,23 @@ func TestToolCardLifecycle(t *testing.T) {
 	}
 	// Cancellation is reported as such, not as an error.
 	m.running = true
+	interrupted := &block{kind: blockTool, id: "interrupted", name: "bash", status: "running"}
+	m.blocks = append(m.blocks, newBlock(blockUser, "wait"), interrupted)
 	m.Update(runDoneMsg{err: context.Canceled})
 	tr = transcript(m)
 	if !strings.Contains(tr, "cancelled") || strings.Contains(tr, "error: context canceled") {
 		t.Fatalf("cancel not reported:\n%s", tr)
+	}
+	if interrupted.status != "error" || interrupted.summary != "cancelled" {
+		t.Fatalf("interrupted tool left in state %+v", interrupted)
+	}
+	if !strings.Contains(tr, "▸ Work · 1 command") || strings.Contains(tr, "✗ bash") {
+		t.Fatalf("cancelled tool did not fold:\n%s", tr)
+	}
+	clickWork(t, m, interrupted)
+	groupClick(t, m, interrupted, false)
+	if got := groupText(m); !strings.Contains(got, "Cancelled before a tool result was received.") || !strings.Contains(got, "✗ bash") {
+		t.Fatalf("cancelled tool details lost:\n%s", got)
 	}
 }
 

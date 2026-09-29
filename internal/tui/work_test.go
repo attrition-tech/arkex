@@ -140,6 +140,43 @@ func TestWorkKeepsTerminalFailuresAndIncompleteRunsVisible(t *testing.T) {
 	}
 }
 
+func TestCancelledWorkFoldsWithoutHidingCancellation(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		work   []*block
+		want   string
+		detail string
+	}{
+		{"reasoning", []*block{newBlock(blockReasoning, "Still investigating.")}, "Work · Thinking", "Still investigating."},
+		{"tool", []*block{groupTool("read", "main.go")}, "Work · 1 read/search", "contents of main.go"},
+		{"partial answer", []*block{newBlock(blockAssistant, "I found part of the issue")}, "Work · Progress", "I found part of the issue"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, _ := testModel(t)
+			m.blocks = append([]*block{newBlock(blockUser, "Investigate")}, tc.work...)
+			m.blocks = append(m.blocks, newBlock(blockSystem, "cancelled"))
+			m.layout()
+			got := groupText(m)
+			if !strings.Contains(got, tc.want) || !strings.Contains(got, "cancelled") || strings.Contains(got, "Still investigating") || strings.Contains(got, "part of the issue") {
+				t.Fatal(got)
+			}
+			head := tc.work[0]
+			clickWork(t, m, head)
+			if head.kind != blockAssistant {
+				groupClick(t, m, head, false)
+			}
+			got = groupText(m)
+			if !strings.Contains(got, "cancelled") || !strings.Contains(got, tc.detail) {
+				t.Fatalf("opening work lost cancellation or content:\n%s", got)
+			}
+			clickWork(t, m, head)
+			if got := groupText(m); strings.Contains(got, tc.detail) || !strings.Contains(got, "cancelled") {
+				t.Fatalf("closing work did not restore compact state:\n%s", got)
+			}
+		})
+	}
+}
+
 func TestWorkRestoredFromSavedConversation(t *testing.T) {
 	m, _ := testModel(t)
 	m.blocks = blocksFromMessages([]fantasy.Message{

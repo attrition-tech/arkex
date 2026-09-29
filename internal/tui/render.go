@@ -37,9 +37,6 @@ var (
 	hintsStyle     lipgloss.Style
 	hoverStyle     lipgloss.Style
 	hoverSeq       string // SGR prefix of hoverStyle, see fillRow
-	modeBuildStyle lipgloss.Style
-	modePlanStyle  lipgloss.Style
-	modeAutoStyle  lipgloss.Style
 	borderStyle    lipgloss.Style
 	toolBodyStyle  lipgloss.Style
 	toolBodyDimmed lipgloss.Style

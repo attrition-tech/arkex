@@ -73,6 +73,8 @@ func TestImageMentionBecomesChipAndFilePart(t *testing.T) {
 
 func TestAttachmentChipsKeyboardAndMouse(t *testing.T) {
 	m, _ := testModel(t)
+	m.appendSystem("Conversation composer fixture")
+	m.layout()
 	writeImage(t, m.o.Cwd, "a.png")
 	writeImage(t, m.o.Cwd, "b.jpg")
 	m.setSession(Connection{Agent: &agent.Agent{}, Name: "fake/m"})

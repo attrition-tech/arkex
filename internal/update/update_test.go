@@ -15,7 +15,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -91,13 +90,13 @@ func TestIsNewer(t *testing.T) {
 
 func TestChecksumFor(t *testing.T) {
 	digest := strings.Repeat("ab", 32)
-	sums := []byte(digest + "  arkex_0.1.0_linux_amd64.tar.gz\n" + digest + " *arkex_0.1.0_windows_amd64.zip\n")
-	for _, name := range []string{"arkex_0.1.0_linux_amd64.tar.gz", "arkex_0.1.0_windows_amd64.zip"} {
+	sums := []byte(digest + "  arkex_0.1.0_linux_amd64.tar.gz\n" + digest + " *arkex_0.1.0_darwin_arm64.tar.gz\n")
+	for _, name := range []string{"arkex_0.1.0_linux_amd64.tar.gz", "arkex_0.1.0_darwin_arm64.tar.gz"} {
 		if got, err := checksumFor(sums, name); err != nil || got != digest {
 			t.Errorf("checksumFor(%s) = %q, %v", name, got, err)
 		}
 	}
-	if _, err := checksumFor(sums, "arkex_0.1.0_darwin_arm64.tar.gz"); err == nil {
+	if _, err := checksumFor(sums, "arkex_0.1.0_linux_arm64.tar.gz"); err == nil {
 		t.Error("expected missing entry error")
 	}
 	// A prefix match must not count: "xarkex_…" is a different file.
@@ -241,7 +240,7 @@ func TestApplyReplacesExecutable(t *testing.T) {
 	if string(got) != "NEW BINARY" {
 		t.Fatalf("executable content = %q", got)
 	}
-	if fi, err := os.Stat(exe); err != nil || (runtime.GOOS != "windows" && fi.Mode().Perm()&0o111 == 0) {
+	if fi, err := os.Stat(exe); err != nil || fi.Mode().Perm()&0o111 == 0 {
 		t.Fatalf("executable bit lost: %v %v", fi, err)
 	}
 	if _, err := os.Stat(exe + ".new"); !errors.Is(err, os.ErrNotExist) {

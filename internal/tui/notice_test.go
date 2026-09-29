@@ -118,6 +118,7 @@ func TestNoticeReplacesExpiresAndRestoresTranscript(t *testing.T) {
 
 func TestNoticeGeometryAndCoveredMouseHits(t *testing.T) {
 	m, _ := testModel(t)
+	m.appendSystem("Conversation notice fixture")
 	for _, width := range []int{100, 60, 20} {
 		m.Update(tea.WindowSizeMsg{Width: width, Height: 24})
 		m.flash(strings.Repeat("界 long-session-name ", 40))
@@ -148,7 +149,7 @@ func TestNoticeGeometryAndCoveredMouseHits(t *testing.T) {
 func TestSuccessfulSettingsDoNotAddTranscriptBlocks(t *testing.T) {
 	m := effortModel(t)
 	n := len(m.blocks)
-	for _, command := range []string{"/effort high", "/mode plan", "/mouse"} {
+	for _, command := range []string{"/effort high", "/mouse"} {
 		m.command(command)
 		if len(m.blocks) != n || m.flashText == "" {
 			t.Fatalf("%s did not produce a transient notice", command)
@@ -157,6 +158,55 @@ func TestSuccessfulSettingsDoNotAddTranscriptBlocks(t *testing.T) {
 	m.command("/effort not-an-effort")
 	if len(m.blocks) != n+1 {
 		t.Fatal("actionable errors must remain in the transcript")
+	}
+}
+
+func TestScrollOverlayHoverFillsInteriorOnly(t *testing.T) {
+	old := theme
+	t.Cleanup(func() { applyTheme(old) })
+	background := regexp.MustCompile(`\x1b\[(?:[0-9]+;)*(?:4[0-8]|10[0-7])(?:;[0-9]+)*m`)
+	for _, th := range themes[:2] {
+		for _, width := range []int{80, 20} {
+			m, _ := testModel(t)
+			applyTheme(th)
+			m.Update(tea.WindowSizeMsg{Width: width, Height: 24})
+			for range 40 {
+				m.blocks = append(m.blocks, newBlock(blockSystem, "Earlier conversation"))
+			}
+			m.refresh()
+			m.wheel(-1)
+			normal, x, y := m.scrollBox()
+			if normal == "" || background.MatchString(normal) {
+				t.Fatal("unhovered control missing or has a background")
+			}
+			// Border cells belong to the same hover target as the label.
+			m.handleMouse(tea.MouseMotionMsg{X: x, Y: y})
+			hovered, hx, hy := m.scrollBox()
+			if !m.scrollHover || hx != x || hy != y || ansi.Strip(hovered) != ansi.Strip(normal) {
+				t.Fatal("hover changed control geometry or content")
+			}
+			side := lipgloss.NewStyle().Foreground(theme.Muted).Render("│")
+			for row, line := range strings.Split(hovered, "\n") {
+				if row == 0 || row == lipgloss.Height(hovered)-1 {
+					if background.MatchString(line) {
+						t.Fatalf("border row has a background: %q", line)
+					}
+					continue
+				}
+				if !strings.HasPrefix(line, side) || !strings.HasSuffix(line, side) {
+					t.Fatalf("side borders must remain unfilled: %q", line)
+				}
+				for col := 1; col < lipgloss.Width(line)-1; col++ {
+					if !background.MatchString(ansi.Cut(line, col, col+1)) {
+						t.Fatalf("%s width %d: interior cell %d,%d has no hover background: %q", th.Name, width, col, row, line)
+					}
+				}
+			}
+			m.handleMouse(tea.MouseMotionMsg{X: x - 1, Y: y})
+			if restored, _, _ := m.scrollBox(); m.scrollHover || restored != normal {
+				t.Fatal("leaving control did not restore normal appearance")
+			}
+		}
 	}
 }
 

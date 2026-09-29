@@ -227,7 +227,7 @@ func TestRunDeniedToolIsReportedToModel(t *testing.T) {
 	fs := &fakeServer{script: []func(http.ResponseWriter){
 		func(w http.ResponseWriter) {
 			sse(w,
-				delta(`{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"rm -rf /\"}"}}]}`, ""),
+				delta(`{"role":"assistant","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"bash","arguments":"{\"command\":\"echo forbidden\"}"}}]}`, ""),
 				delta(`{}`, "tool_calls"),
 			)
 		},
@@ -242,7 +242,7 @@ func TestRunDeniedToolIsReportedToModel(t *testing.T) {
 		Connections: map[string]config.Connection{"fake": {
 			API: config.APIOpenAICompat, BaseURL: srv.URL, Models: []config.Model{{ID: "m"}},
 		}},
-		Permissions: map[string]config.Permission{},
+		Permissions: map[string]config.Permission{"bash": config.PermissionDeny},
 	}
 	ref, _ := cfg.Resolve("fake/m")
 	model, err := provider.Open(context.Background(), ref, srv.Client())

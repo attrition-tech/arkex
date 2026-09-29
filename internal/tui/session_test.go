@@ -92,7 +92,7 @@ func TestResumeGaugeBeforeFirstResponse(t *testing.T) {
 	m := footerModel(t)
 	for _, lastInput := range []int64{730, 0} {
 		s := session.New(m.o.Cwd)
-		s.Update(sampleMessages(), m.sess.Name, "build", 50000, 2000)
+		s.Update(sampleMessages(), session.Usage{Model: m.sess.Name, Input: 50000, Output: 2000})
 		s.LastInput = lastInput // zero omits the field, like legacy sessions
 		if err := s.Save(); err != nil {
 			t.Fatal(err)
@@ -146,16 +146,15 @@ func TestSaveAndResume(t *testing.T) {
 		t.Fatal("/clear must reset the conversation")
 	}
 
-	// Resume with a different model and mode rebuilds everything.
+	// Resume with a different model rebuilds everything.
 	m.setSession(Connection{Agent: ag, Name: "local/b"})
-	m.setMode(agent.ModeAuto)
 	_, cmd = m.command("/resume " + id)
 	h.drive(cmd)
 	if m.conv == nil || m.conv.ID != id || len(m.sess.Agent.Messages()) != 4 || m.sess.Name != "local/a" {
 		t.Fatalf("resume did not restore the agent: conv=%v model=%s", m.conv, m.sess.Name)
 	}
-	if m.usageIn != 42 || m.lastInput != 17 || m.mode() != agent.ModeBuild {
-		t.Fatalf("usage/mode not restored: in=%d last=%d mode=%s", m.usageIn, m.lastInput, m.mode())
+	if m.usageIn != 42 || m.lastInput != 17 {
+		t.Fatalf("usage not restored: in=%d last=%d", m.usageIn, m.lastInput)
 	}
 	if got := len(m.blocks); got != 1+5 { // welcome + 5 rebuilt; notices are not transcript blocks
 		t.Fatalf("blocks = %d", got)
@@ -179,10 +178,10 @@ func TestSaveAndResume(t *testing.T) {
 		t.Fatalf("palette = %+v", m.pal)
 	}
 	// A fresh model in this directory lists the session on the welcome screen.
-	fresh := newModel(Options{Cwd: m.o.Cwd, Mode: agent.NewModePolicy(agent.ModeBuild, nil), Connect: m.o.Connect, Resume: "latest"})
+	fresh := newModel(Options{Cwd: m.o.Cwd, Connect: m.o.Connect, Resume: "latest"})
 	(&harness{model: fresh}).drive(fresh.Init())
-	if !strings.Contains(fresh.blocks[0].rendered, "fix the build") || !strings.Contains(fresh.blocks[0].rendered, "/resume "+id) {
-		t.Fatalf("welcome = %q", fresh.blocks[0].rendered)
+	if len(fresh.start.recent) != 1 || fresh.start.recent[0].ID != id || fresh.start.recent[0].Title != "fix the build" {
+		t.Fatalf("recent sessions = %+v", fresh.start.recent)
 	}
 	if fresh.conv == nil || fresh.conv.ID != id {
 		t.Fatal("Resume: latest must load the session at startup")

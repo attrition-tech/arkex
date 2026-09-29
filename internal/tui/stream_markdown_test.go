@@ -50,6 +50,34 @@ func TestStreamingMarkdownSnapshotAndFinalFlush(t *testing.T) {
 	}
 }
 
+func TestStreamingMarkdownFencesDoNotGuessLanguages(t *testing.T) {
+	const body = "package main\nfunc main() { println(42) }\n"
+	for _, language := range []string{"", "diagram", "arkex-unknown-language"} {
+		m, _ := testModel(t)
+		m.running = true
+		b := newBlock(blockAssistant, "```"+language+"\n"+body)
+		m.blocks = []*block{b}
+		var md markdown
+		want := md.render("```text\n"+body, m.width-4)
+		cmd := m.streamMarkdown()
+		if cmd == nil {
+			t.Fatal("missing streaming render")
+		}
+		msg := cmd().(streamMarkdownMsg)
+		if got := strings.Join(msg.lines, "\n"); got != want {
+			t.Fatalf("streamed %q fence guessed syntax: %q", language, got)
+		}
+		m.Update(msg)
+		streamed := strings.Join(b.lines, "\n")
+		b.text.WriteString("```")
+		m.running = false
+		m.refresh()
+		if got := strings.Join(b.lines, "\n"); got != streamed {
+			t.Fatalf("completed %q fence changed formatting: %q", language, got)
+		}
+	}
+}
+
 func TestStreamingMarkdownRejectsStaleResults(t *testing.T) {
 	for _, change := range []string{"width", "theme", "run", "block"} {
 		t.Run(change, func(t *testing.T) {

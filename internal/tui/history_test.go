@@ -3,7 +3,6 @@ package tui
 import (
 	"errors"
 	"os"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -60,7 +59,7 @@ func TestHistoryNavigation(t *testing.T) {
 		t.Fatalf("reloaded = %q", again.entries)
 	}
 	fi, err := os.Stat(historyPath(cwd))
-	if err != nil || (runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600) {
+	if err != nil || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("history file: %v %v", fi, err)
 	}
 }
@@ -84,6 +83,7 @@ func TestHistoryCap(t *testing.T) {
 func TestUpDownRecallPrompts(t *testing.T) {
 	t.Setenv("ARKEX_HOME", t.TempDir())
 	m, _ := testModel(t)
+	m.setSession(Connection{Agent: &agent.Agent{}, Name: "fake/model"})
 	m.hist.add("older prompt")
 	m.hist.add("/help")
 	typeKeys(m, "n", "e", "w")

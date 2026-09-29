@@ -369,6 +369,7 @@ func checkCached(t *testing.T, what string, prev string, render func() string, d
 
 func TestInputViewCacheTracksEveryVisibleChange(t *testing.T) {
 	m, _ := testModel(t)
+	m.appendSystem("Conversation composer fixture")
 	m.layout()
 	drop := func() { m.inputCache.view = "" }
 	render := m.inputView
@@ -446,8 +447,6 @@ func TestFooterCacheTracksEveryVisibleChange(t *testing.T) {
 	if !strings.Contains(ansi.Strip(v), "25%") {
 		t.Fatalf("ctx gauge missing: %q", ansi.Strip(v))
 	}
-	m.o.Mode.SetMode(agent.ModePlan)
-	v = checkCached(t, "mode", v, render, drop)
 	m.width = 80
 	v = checkCached(t, "width", v, render, drop)
 	t.Cleanup(func() { applyTheme(themes[0]) })

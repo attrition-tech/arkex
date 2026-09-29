@@ -68,7 +68,6 @@ jobs:
           name: release-${{ github.sha }}
           path: |
             dist/arkex_*.tar.gz
-            dist/arkex_*.zip
             dist/SHA256SUMS
             dist/SHA256SUMS.sig
           retention-days: 30

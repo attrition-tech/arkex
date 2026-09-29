@@ -11,7 +11,7 @@ import (
 
 // CurrentVersion is the config format this build writes. Files without a
 // "version" key are version 0, the format used before versioning existed.
-const CurrentVersion = 2
+const CurrentVersion = 4
 
 // ErrNewerConfig is returned when a file was written by a newer arkex.
 var ErrNewerConfig = errors.New("config written by a newer arkex")
@@ -51,6 +51,32 @@ var migrations = []func(root map[string]any) error{
 		root["connections"] = ps
 		return nil
 	},
+	// 2 → 3: approval prompts were removed. Existing asks become allows,
+	// while explicit denies remain fail-closed.
+	func(root map[string]any) error {
+		perms, _ := root["permissions"].(map[string]any)
+		for tool, value := range perms {
+			if value == "ask" {
+				perms[tool] = string(PermissionAllow)
+			}
+		}
+		return nil
+	},
+	// 3 → 4: the prerequisite installer became the packages tool. A deny
+	// under either spelling must survive, including conflicting entries.
+	func(root map[string]any) error {
+		if err := validatePermissions(root); err != nil {
+			return err
+		}
+		perms, _ := root["permissions"].(map[string]any)
+		if old, ok := perms["install_dependency"]; ok {
+			if _, exists := perms["packages"]; !exists || old == string(PermissionDeny) {
+				perms["packages"] = old
+			}
+			delete(perms, "install_dependency")
+		}
+		return nil
+	},
 }
 
 // versionOf reads the version key (0 when absent).
@@ -78,7 +104,11 @@ func Migrate(root map[string]any) (bool, error) {
 		return false, fmt.Errorf("%w (file is version %d, this arkex understands %d; run: arkex update)", ErrNewerConfig, from, CurrentVersion)
 	}
 	if from == CurrentVersion {
-		return false, nil
+		perms, _ := root["permissions"].(map[string]any)
+		if _, exists := perms["install_dependency"]; exists {
+			return false, errors.New("permissions.install_dependency was renamed to permissions.packages in config version 4; rename the key and preserve any deny")
+		}
+		return false, validatePermissions(root)
 	}
 	for v := from; v < CurrentVersion; v++ {
 		if err := migrations[v](root); err != nil {
@@ -86,7 +116,18 @@ func Migrate(root map[string]any) (bool, error) {
 		}
 	}
 	root["version"] = CurrentVersion
-	return true, nil
+	return true, validatePermissions(root)
+}
+
+func validatePermissions(root map[string]any) error {
+	perms, _ := root["permissions"].(map[string]any)
+	for tool, value := range perms {
+		p, ok := value.(string)
+		if !ok || (p != string(PermissionAllow) && p != string(PermissionDeny)) {
+			return fmt.Errorf("permissions.%s should be one of allow, deny, got %q", tool, value)
+		}
+	}
+	return nil
 }
 
 // decode parses one config file into a generic root, migrates it, and then

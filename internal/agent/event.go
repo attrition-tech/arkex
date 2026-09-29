@@ -45,16 +45,6 @@ type ToolCall struct {
 	ID    string `json:"id"`
 	Name  string `json:"name"`
 	Input string `json:"input"`
-	// Reason is set by a policy when it hands the call to an Asker: why
-	// this call needs the user, e.g. "writes outside the workspace: ~/x".
-	Reason string `json:"reason,omitempty"`
-	// Grantable is set by a policy that will honour Answer AllowSession for
-	// this call, so the prompt can offer "allow for this session".
-	Grantable bool `json:"grantable,omitempty"`
-	// TrustDirectory scopes AllowSession to this directory, never a whole tool.
-	TrustDirectory string `json:"trust_directory,omitempty"`
-	TrustAccess    string `json:"trust_access,omitempty"`
-	Workdir        string `json:"workdir,omitempty"`
 }
 
 // ToolDecision records the policy result for a call.

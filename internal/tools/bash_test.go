@@ -9,9 +9,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
+	"runtime"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -43,7 +42,7 @@ func TestBashScratchEnvironment(t *testing.T) {
 func TestBashCombinesStreamsAndRunsInDir(t *testing.T) {
 	dir := t.TempDir()
 	b := &Bash{Dir: dir, Shell: "/bin/sh"}
-	res, err := runBash(t, b, map[string]any{"command": "echo out; echo err 1>&2; pwd"})
+	res, err := runBash(t, b, map[string]any{"command": "echo out; echo err 1>&2; pwd; printf working > sentinel"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,11 +52,18 @@ func TestBashCombinesStreamsAndRunsInDir(t *testing.T) {
 	}
 	real, _ := filepath.EvalSymlinks(dir)
 	printed := strings.TrimSpace(strings.TrimPrefix(res.Output, "out\nerr\n"))
-	printed, _ = filepath.EvalSymlinks(printed)
-	if printed != real {
-		t.Fatalf("pwd not in Dir: %q", res.Output)
+	if runtime.GOOS == "darwin" {
+		if !filepath.IsAbs(printed) || !strings.Contains(printed, "/arkex-execution-") || printed == real {
+			t.Fatalf("pwd not in private copy: %q", printed)
+		}
+	} else {
+		printed, _ = filepath.EvalSymlinks(printed)
+		if printed != real {
+			t.Fatalf("pwd not in Dir: %q", res.Output)
+		}
 	}
-	if res.Summary != "echo out; echo err 1>&2; pwd" {
+	sandboxContents(t, filepath.Join(dir, "sentinel"), "working")
+	if res.Summary != "echo out; echo err 1>&2; pwd; printf working > sentinel" {
 		t.Fatalf("summary = %q", res.Summary)
 	}
 }
@@ -107,13 +113,12 @@ func TestBashEmptyAndSilentCommands(t *testing.T) {
 
 func TestBashTimeoutKillsProcessGroup(t *testing.T) {
 	dir := t.TempDir()
-	pidFile := filepath.Join(dir, "child.pid")
 	b := &Bash{Dir: dir, Shell: "/bin/sh"}
 	start := time.Now()
 	// A background grandchild that would outlive the shell if only the shell
 	// were killed.
 	res, err := runBash(t, b, map[string]any{
-		"command":    "sleep 30 & echo $! > child.pid; echo started; wait",
+		"command":    "(sleep 1; echo survived > child-survived) & echo started; wait",
 		"timeout_ms": 300,
 	})
 	if err == nil || err.Error() != "timed out" {
@@ -125,24 +130,12 @@ func TestBashTimeoutKillsProcessGroup(t *testing.T) {
 	if !strings.HasPrefix(res.Output, "started\n") || !strings.Contains(res.Output, "[command timed out after 300ms]") {
 		t.Fatalf("output = %q", res.Output)
 	}
-	pidText, readErr := os.ReadFile(pidFile)
-	if readErr != nil {
-		t.Fatal(readErr)
+	// A Linux sandbox PID is not a host PID. Check the delayed side effect
+	// instead of querying an unrelated host process with the same number.
+	time.Sleep(1200 * time.Millisecond)
+	if _, err := os.Stat(filepath.Join(dir, "child-survived")); !os.IsNotExist(err) {
+		t.Fatal("background child survived the timeout")
 	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(pidText)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Process-group kill: the grandchild must be gone (or a zombie being
-	// reaped) shortly after the tool returns.
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if err := syscall.Kill(pid, 0); err != nil {
-			return // ESRCH: gone
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("background child %d survived the timeout", pid)
 }
 
 func TestBashTruncatesHugeOutput(t *testing.T) {

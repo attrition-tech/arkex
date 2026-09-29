@@ -30,7 +30,7 @@ class ReleaseTests(unittest.TestCase):
         self.names = [
             "arkex_0.7.33_darwin_amd64.tar.gz", "arkex_0.7.33_darwin_arm64.tar.gz",
             "arkex_0.7.33_linux_amd64.tar.gz", "arkex_0.7.33_linux_arm64.tar.gz",
-            "arkex_0.7.33_windows_amd64.zip", "SHA256SUMS", "SHA256SUMS.sig",
+            "SHA256SUMS", "SHA256SUMS.sig",
         ]
         for name in self.names:
             (self.directory / name).write_bytes(name.encode())
@@ -67,7 +67,7 @@ class ReleaseTests(unittest.TestCase):
     def test_initial_publish_then_rerun_changes_nothing(self):
         with patch.object(release, "gh", side_effect=self.fake_gh):
             release.github("v0.7.33", self.directory)
-            self.assertEqual([call[1] for call in self.writes], ["create"] + ["upload"] * 7 + ["edit"])
+            self.assertEqual([call[1] for call in self.writes], ["create"] + ["upload"] * 6 + ["edit"])
             self.assertEqual(set(self.assets), set(self.names))
             self.assertIn("--latest", self.writes[-1])
             self.writes.clear()
@@ -87,7 +87,7 @@ class ReleaseTests(unittest.TestCase):
         self.other_releases = [{"tag_name": "v0.8.0", "draft": False, "prerelease": False}]
         with patch.object(release, "gh", side_effect=self.fake_gh):
             release.github("v0.7.33", self.directory)
-        self.assertEqual([call[1] for call in self.writes], ["upload"] * 5 + ["edit"])
+        self.assertEqual([call[1] for call in self.writes], ["upload"] * 4 + ["edit"])
         self.assertIn("--latest=false", self.writes[-1])
 
     def test_mismatched_asset_is_never_overwritten(self):
@@ -96,6 +96,19 @@ class ReleaseTests(unittest.TestCase):
         with patch.object(release, "gh", side_effect=self.fake_gh), self.assertRaisesRegex(ValueError, "differs"):
             release.github("v0.7.33", self.directory)
         self.assertEqual(self.writes, [])
+
+    def test_unexpected_assets_block_publication_without_deleting_them(self):
+        for draft in (True, False):
+            with self.subTest(draft=draft):
+                self.assets = {name: (self.directory / name).read_bytes() for name in self.names}
+                extra = "arkex_0.7.33_windows_amd64.zip"
+                self.assets[extra] = b"obsolete asset"
+                self.remote = {"tag_name": "v0.7.33", "draft": draft,
+                               "assets": [{"name": name} for name in self.assets]}
+                with patch.object(release, "gh", side_effect=self.fake_gh), self.assertRaisesRegex(ValueError, "Unexpected.*windows"):
+                    release.github("v0.7.33", self.directory)
+                self.assertEqual(self.writes, [])
+                self.assertEqual(self.assets[extra], b"obsolete asset")
 
     def test_missing_local_or_published_assets_fail_closed(self):
         self.remote = {"tag_name": "v0.7.33", "draft": False, "assets": []}

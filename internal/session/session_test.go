@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -15,7 +14,7 @@ import (
 func TestConcurrentSavesRejectStaleAndDeletedSessions(t *testing.T) {
 	t.Setenv("ARKEX_HOME", t.TempDir())
 	s := New(t.TempDir())
-	s.Update([]fantasy.Message{fantasy.NewUserMessage("original")}, "m", "build", 11, 7)
+	s.Update([]fantasy.Message{fantasy.NewUserMessage("original")}, Usage{Model: "m", Input: 11, Output: 7})
 	if err := s.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +65,7 @@ func TestSaveListLoad(t *testing.T) {
 	a.Update([]fantasy.Message{
 		fantasy.NewUserMessage("fix the build\n\n<file path=\"go.mod\">\nmodule x\n</file>"),
 		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.TextPart{Text: "done"}}},
-	}, "local/m", "build", 10, 5)
+	}, Usage{Model: "local/m", Input: 10, Output: 5})
 	if a.Title != "fix the build" {
 		t.Fatalf("title = %q (attached files must not leak into it)", a.Title)
 	}
@@ -76,7 +75,7 @@ func TestSaveListLoad(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 	b := New(cwd)
-	b.Update([]fantasy.Message{fantasy.NewUserMessage(strings.Repeat("x", 100))}, "local/m", "plan", 1, 1)
+	b.Update([]fantasy.Message{fantasy.NewUserMessage(strings.Repeat("x", 100))}, Usage{Model: "local/m", Input: 1, Output: 1})
 	if err := b.Save(); err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +100,7 @@ func TestSaveListLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Mode != "build" || got.UsageIn != 10 || len(got.Messages) != 2 || UserText(got.Messages[0]) != "fix the build" {
+	if got.UsageIn != 10 || len(got.Messages) != 2 || UserText(got.Messages[0]) != "fix the build" {
 		t.Fatalf("round trip lost data: %+v", got)
 	}
 	// Prefix resolution: the date part is shared, the random suffix is not.
@@ -116,7 +115,7 @@ func TestSaveListLoad(t *testing.T) {
 	}
 
 	dir, _ := Dir(cwd)
-	if st, _ := os.Stat(filepath.Join(dir, a.ID+".json")); runtime.GOOS != "windows" && st.Mode().Perm() != 0o600 {
+	if st, _ := os.Stat(filepath.Join(dir, a.ID+".json")); st.Mode().Perm() != 0o600 {
 		t.Fatalf("session files must be 0600, got %v", st.Mode().Perm())
 	}
 	// A corrupt file is skipped by List but reported by Load.

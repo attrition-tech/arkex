@@ -124,12 +124,13 @@ func (m *model) scrollBox() (box string, x, y int) {
 		unit = "line"
 	}
 	text := ansi.Truncate(fmt.Sprintf("↓ %d %s below · Latest", below, unit), m.width-6, "…")
-	if m.scrollHover {
-		text = fillRow(text, lipgloss.Width(text))
-	}
-	box = lipgloss.NewStyle().Foreground(theme.Text).
+	style := lipgloss.NewStyle().Foreground(theme.Text).
 		Border(lipgloss.RoundedBorder()).BorderForeground(theme.Muted).
-		Padding(0, 1).Render(text)
+		Padding(0, 1)
+	if m.scrollHover {
+		style = style.Background(theme.HoverBg)
+	}
+	box = style.Render(text)
 	x = (m.width - lipgloss.Width(box)) / 2
 	y = m.vp.Height() - lipgloss.Height(box)
 	if notice, nx, ny := m.noticeBox(); notice != "" && x < nx+lipgloss.Width(notice) && x+lipgloss.Width(box) > nx {

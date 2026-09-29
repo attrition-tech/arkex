@@ -7,7 +7,6 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/attrition-tech/arkex/internal/agent"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -91,11 +90,11 @@ func TestIdleQuitPreservesDraft(t *testing.T) {
 	}
 }
 
-func TestRetryAndToolConfirmation(t *testing.T) {
-	for _, retry := range []bool{false, true} {
+func TestRetryConfirmation(t *testing.T) {
+	for _, retry := range []bool{true} {
 		m, _ := testModel(t)
 		m.running = true
-		reply := make(chan agent.Answer, 1)
+		reply := make(chan bool, 1)
 		m.Update(approvalMsg{retry: retry, reply: reply})
 		typeKeys(m, "esc")
 		if retry {
@@ -110,7 +109,7 @@ func TestRetryAndToolConfirmation(t *testing.T) {
 		}
 		select {
 		case ans := <-reply:
-			if ans != agent.Deny {
+			if ans {
 				t.Fatal(ans)
 			}
 		default:
@@ -151,7 +150,6 @@ func TestTabPromptFocus(t *testing.T) {
 	m.blocks = []*block{first, newBlock(blockAssistant, strings.Repeat("reply\n", 60)), last}
 	m.hist = &history{entries: []string{"unrelated persisted history"}, idx: 1}
 	m.layout()
-	mode := m.mode()
 	for _, step := range []struct {
 		key  string
 		want *block
@@ -160,7 +158,7 @@ func TestTabPromptFocus(t *testing.T) {
 		{"shift+tab", last}, {"shift+tab", nil}, {"shift+tab", nil},
 	} {
 		typeKeys(m, step.key)
-		if m.input.Value() != "" || m.promptFocus != step.want || m.mode() != mode {
+		if m.input.Value() != "" || m.promptFocus != step.want {
 			t.Fatalf("%s: input=%q focus=%p want=%p", step.key, m.input.Value(), m.promptFocus, step.want)
 		}
 		if first.key.hover != (step.want == first) || last.key.hover != (step.want == last) {
@@ -215,8 +213,8 @@ func TestConfirmationPopupAndTimerIsolation(t *testing.T) {
 	}
 	m.running = true
 	typeKeys(m, "ctrl+c")
-	reply := make(chan agent.Answer, 1)
-	m.Update(approvalMsg{reply: reply})
+	reply := make(chan bool, 1)
+	m.Update(approvalMsg{retry: true, reply: reply})
 	typeKeys(m, "ctrl+c")
 	if len(reply) != 0 || m.confirmKey != "ctrl+c" {
 		t.Fatal("approval must require its own confirmation")

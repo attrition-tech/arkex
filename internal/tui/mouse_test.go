@@ -206,17 +206,6 @@ func TestPaletteClicks(t *testing.T) {
 	if g.rows[0] != -1 || g.rows[1] < 0 {
 		t.Fatalf("rows = %v", g.rows)
 	}
-	want := m.pal.view[g.rows[2]] // "Switch to plan mode"
-	if !strings.HasPrefix(want.title, "Switch to plan") {
-		t.Fatalf("unexpected third row %+v", want)
-	}
-	click(m, g.x+3, g.y+1+paletteHeaderRows+2)
-	if m.pal != nil || string(m.mode()) != "plan" {
-		t.Fatalf("click on a row must run it: pal=%v mode=%s", m.pal != nil, m.mode())
-	}
-
-	typeKeys(m, "/")
-	m.paletteBox(m.width, m.vp.Height())
 	click(m, 0, 0)
 	if m.pal != nil {
 		t.Fatal("click outside the box must close the palette")

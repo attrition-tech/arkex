@@ -37,7 +37,7 @@ func TestPrintSeparatesTextFromToolActivity(t *testing.T) {
 		agent.ToolDecision{ID: "c1", Name: "bash", Allowed: true},
 		agent.ToolResult{ID: "c1", Name: "bash", Summary: "ls -la", Duration: 12 * time.Millisecond},
 		agent.ToolCall{ID: "c2", Name: "edit", Input: `{"path":"x"}`},
-		agent.ToolDecision{ID: "c2", Name: "edit", Allowed: false, Reason: "plan mode"},
+		agent.ToolDecision{ID: "c2", Name: "edit", Allowed: false, Reason: "denied by config"},
 		agent.ToolResult{ID: "c2", Name: "edit", IsError: true, Output: "denied\nby policy"},
 		agent.TextDelta{Text: "Done."},
 		agent.RunEnd{Steps: 2, Usage: fantasy.Usage{InputTokens: 100, OutputTokens: 7}},
@@ -57,7 +57,7 @@ func TestPrintSeparatesTextFromToolActivity(t *testing.T) {
 	wantErr := "→ bash {\"command\": \"ls -la\"}\n" +
 		"  ✓ ls -la (12ms)\n" +
 		"→ edit {\"path\":\"x\"}\n" +
-		"  ✗ plan mode\n" +
+		"  ✗ denied by config\n" +
 		"  ✗ denied by policy\n" +
 		"[2 step(s), 100 in / 7 out tokens]\n"
 	if got := errOut.String(); got != wantErr {

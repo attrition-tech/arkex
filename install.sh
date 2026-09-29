@@ -92,7 +92,6 @@ fi
 os=$(uname -s | tr '[:upper:]' '[:lower:]')
 case "$os" in
   linux|darwin) ;;
-  mingw*|msys*|cygwin*) fail "Windows: download the zip from $BASE (install.ps1 coming)" ;;
   *) fail "unsupported OS: $os" ;;
 esac
 arch=$(uname -m)

@@ -54,6 +54,8 @@ func TestInputRowsCountsEveryLine(t *testing.T) {
 // the cap; beyond it the status bar reports the real height.
 func TestInputGrowsWithWrappedPaste(t *testing.T) {
 	m, _ := testModel(t)
+	m.appendSystem("Conversation composer fixture")
+	m.layout()
 	if m.input.Height() != 1 {
 		t.Fatalf("initial height %d", m.input.Height())
 	}

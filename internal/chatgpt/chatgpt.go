@@ -470,12 +470,9 @@ func OpenBrowser(u string) error {
 		cmd = exec.Command(b, u)
 		return cmd.Start()
 	}
-	switch runtime.GOOS {
-	case "darwin":
+	if runtime.GOOS == "darwin" {
 		cmd = exec.Command("open", u)
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", u)
-	default:
+	} else {
 		cmd = exec.Command("xdg-open", u)
 	}
 	return cmd.Start()

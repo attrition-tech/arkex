@@ -86,6 +86,7 @@ func Default(dir string) *Registry {
 		&Write{Root: dir},
 		&Edit{Root: dir},
 		&Bash{Dir: dir},
+		&Packages{Root: dir},
 	)
 }
 

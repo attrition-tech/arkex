@@ -3,7 +3,7 @@
 // Layout served by the host (any HTTP server; no API required):
 //
 //	<base>/<channel>.json                                   Manifest
-//	<base>/v<version>/arkex_<version>_<os>_<arch>.tar.gz    (zip on windows)
+//	<base>/v<version>/arkex_<version>_<os>_<arch>.tar.gz
 //	<base>/v<version>/SHA256SUMS
 //	<base>/v<version>/SHA256SUMS.sig                        ed25519, see sign.go
 //
@@ -16,7 +16,6 @@ package update
 
 import (
 	"archive/tar"
-	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -167,12 +166,8 @@ func (c *Client) Apply(ctx context.Context, m Manifest) (Result, error) {
 		return Result{}, err
 	}
 
-	ext := ".tar.gz"
-	if goos == "windows" {
-		ext = ".zip"
-	}
 	version := strings.TrimPrefix(m.Version, "v")
-	archiveName := fmt.Sprintf("arkex_%s_%s_%s%s", version, goos, goarch, ext)
+	archiveName := fmt.Sprintf("arkex_%s_%s_%s.tar.gz", version, goos, goarch)
 	dir := base + "/" + m.Tag()
 
 	c.logf("downloading %s", archiveName)
@@ -200,11 +195,7 @@ func (c *Client) Apply(ctx context.Context, m Manifest) (Result, error) {
 	}
 	c.logf("signature and checksum verified")
 
-	binName := "arkex"
-	if goos == "windows" {
-		binName += ".exe"
-	}
-	bin, err := extractBinary(archive, ext, binName)
+	bin, err := extractBinary(archive, "arkex")
 	if err != nil {
 		return Result{}, err
 	}
@@ -227,7 +218,7 @@ func (c *Client) Apply(ctx context.Context, m Manifest) (Result, error) {
 		return Result{}, fmt.Errorf("new binary failed self-test: %w", err)
 	}
 	c.logf("installing update")
-	if err := replaceExecutable(exe, staged, goos); err != nil {
+	if err := replaceExecutable(exe, staged); err != nil {
 		return Result{}, err
 	}
 	return Result{From: c.CurrentVersion, To: version, Executable: exe}, nil
@@ -371,45 +362,26 @@ func checksumFor(sums []byte, name string) (string, error) {
 	return "", fmt.Errorf("SHA256SUMS has no entry for %s (no build for this platform?)", name)
 }
 
-// extractBinary pulls the single file named binName out of a tar.gz or zip.
-func extractBinary(archive []byte, ext, binName string) ([]byte, error) {
+// extractBinary pulls the single file named binName out of a tar.gz.
+func extractBinary(archive []byte, binName string) ([]byte, error) {
 	const maxBin = 256 << 20
-	switch ext {
-	case ".tar.gz":
-		gz, err := gzip.NewReader(bytes.NewReader(archive))
+	gz, err := gzip.NewReader(bytes.NewReader(archive))
+	if err != nil {
+		return nil, fmt.Errorf("open archive: %w", err)
+	}
+	defer func() { _ = gz.Close() }()
+	tr := tar.NewReader(gz)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
 		if err != nil {
-			return nil, fmt.Errorf("open archive: %w", err)
+			return nil, fmt.Errorf("read archive: %w", err)
 		}
-		tr := tar.NewReader(gz)
-		for {
-			h, err := tr.Next()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				return nil, fmt.Errorf("read archive: %w", err)
-			}
-			if h.Typeflag == tar.TypeReg && path.Base(h.Name) == binName {
-				return io.ReadAll(io.LimitReader(tr, maxBin))
-			}
+		if h.Typeflag == tar.TypeReg && path.Base(h.Name) == binName {
+			return io.ReadAll(io.LimitReader(tr, maxBin))
 		}
-	case ".zip":
-		zr, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
-		if err != nil {
-			return nil, fmt.Errorf("open archive: %w", err)
-		}
-		for _, f := range zr.File {
-			if path.Base(f.Name) == binName && !f.FileInfo().IsDir() {
-				rc, err := f.Open()
-				if err != nil {
-					return nil, err
-				}
-				defer func() { _ = rc.Close() }()
-				return io.ReadAll(io.LimitReader(rc, maxBin))
-			}
-		}
-	default:
-		return nil, fmt.Errorf("unsupported archive type %q", ext)
 	}
 	return nil, fmt.Errorf("archive does not contain %s", binName)
 }
@@ -424,22 +396,9 @@ func defaultSelfTest(ctx context.Context, bin string) error {
 	return nil
 }
 
-// replaceExecutable moves staged over exe. On Windows the running image is
-// locked against deletion but not rename, so the old file is moved aside.
-func replaceExecutable(exe, staged, goos string) error {
-	if goos != "windows" {
-		if err := os.Rename(staged, exe); err != nil {
-			return fmt.Errorf("replace %s: %w", exe, err)
-		}
-		return nil
-	}
-	old := exe + ".old"
-	_ = os.Remove(old)
-	if err := os.Rename(exe, old); err != nil {
-		return fmt.Errorf("move aside %s: %w", exe, err)
-	}
+// replaceExecutable atomically moves staged over exe.
+func replaceExecutable(exe, staged string) error {
 	if err := os.Rename(staged, exe); err != nil {
-		_ = os.Rename(old, exe) // best-effort rollback
 		return fmt.Errorf("replace %s: %w", exe, err)
 	}
 	return nil

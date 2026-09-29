@@ -14,7 +14,7 @@ import (
 func TestAttentionWaveAndTitle(t *testing.T) {
 	m, _ := testModel(t)
 	m.running = true
-	m.pending = newApproval(agent.ToolCall{Name: "bash"}, make(chan agent.Answer, 1))
+	m.pending = newRetry(agent.ToolCall{Name: "bash"}, make(chan bool, 1))
 	seen := map[string]bool{}
 	for frame := 0; frame < 12; frame++ {
 		m.frame = frame
@@ -39,8 +39,7 @@ func TestAttentionWaveAndTitle(t *testing.T) {
 func TestNotificationBellEvents(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		for _, event := range []tea.Msg{
-			approvalMsg{call: agent.ToolCall{Name: "bash"}, reply: make(chan agent.Answer, 1)},
-			approvalMsg{retry: true, reply: make(chan agent.Answer, 1)},
+			approvalMsg{retry: true, reply: make(chan bool, 1)},
 			runDoneMsg{}, runDoneMsg{err: errors.New("failed")},
 			runDoneMsg{err: &agent.PausedError{Reason: "repeated tool"}},
 			runDoneMsg{err: context.Canceled},

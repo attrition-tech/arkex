@@ -10,5 +10,5 @@ bin="${1:-/tmp/arkex}"; home="${2:-/tmp/arkexhome}"
 repo="$(cd "$(dirname "$0")/../.." && pwd)"
 tmux kill-session -t arkextest 2>/dev/null || true
 tmux new-session -d -s arkextest -x 120 -y 34 -c "$repo" \
-  "env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE TERM=xterm-256color COLORTERM=truecolor HOME=$home ARKEX_HOME=$home FAKE_KEY=sk-test BROWSER=true $bin --mode auto -m fake/deepseek-v4-flash 2>/tmp/arkex.err; sleep 300"
+  "env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE TERM=xterm-256color COLORTERM=truecolor HOME=$home ARKEX_HOME=$home FAKE_KEY=sk-test BROWSER=true $bin -m fake/deepseek-v4-flash 2>/tmp/arkex.err; sleep 300"
 echo "session arkextest started"

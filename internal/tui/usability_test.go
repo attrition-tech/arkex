@@ -27,10 +27,10 @@ func TestRecalledPromptScrollAndCopy(t *testing.T) {
 	if v.Cursor == nil || v.Cursor.Y < m.inputY() || v.Cursor.Y >= m.inputY()+m.input.Height() {
 		t.Fatalf("cursor outside input: %+v", v.Cursor)
 	}
-	y := m.inputY()
-	m.handleMouse(tea.MouseClickMsg{X: 2, Y: y, Button: tea.MouseLeft})
-	m.handleMouse(tea.MouseMotionMsg{X: 6, Y: y, Button: tea.MouseLeft})
-	m.handleMouse(tea.MouseReleaseMsg{X: 6, Y: y, Button: tea.MouseLeft})
+	x, y := m.inputX(), m.inputY()
+	m.handleMouse(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+	m.handleMouse(tea.MouseMotionMsg{X: x + 4, Y: y, Button: tea.MouseLeft})
+	m.handleMouse(tea.MouseReleaseMsg{X: x + 4, Y: y, Button: tea.MouseLeft})
 	if got := m.input.SelectedText(); got != "line" {
 		t.Fatalf("prompt selection=%q", got)
 	}
@@ -64,17 +64,15 @@ func TestStaleSelectionAcrossClear(t *testing.T) {
 
 func TestSmallTerminalDecisionsAndInput(t *testing.T) {
 	for _, size := range [][2]int{{24, 8}, {40, 12}, {80, 10}, {80, 24}} {
-		for _, state := range []string{"input", "approval", "retry"} {
+		for _, state := range []string{"input", "retry"} {
 			t.Run(fmt.Sprintf("%dx%d/%s", size[0], size[1], state), func(t *testing.T) {
 				m, _ := testModel(t)
 				m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
 				switch state {
 				case "input":
 					m.setInput(strings.Repeat("日本語 test\n", 20))
-				case "approval":
-					m.Update(approvalMsg{call: agent.ToolCall{Name: "write", Input: `{"path":"demo.txt","content":"one\ntwo\nthree"}`, Grantable: true}, reply: make(chan agent.Answer, 1)})
 				case "retry":
-					m.Update(approvalMsg{retry: true, err: agent.ErrMalformedToolResponse, reply: make(chan agent.Answer, 1)})
+					m.Update(approvalMsg{retry: true, err: agent.ErrMalformedToolResponse, reply: make(chan bool, 1)})
 				}
 				v := m.View()
 				rows := strings.Split(v.Content, "\n")

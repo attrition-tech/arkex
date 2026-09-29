@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 	"testing"
 )
@@ -54,7 +53,7 @@ func TestSaveProviderCreatesAndMerges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if runtime.GOOS != "windows" && fi.Mode().Perm() != 0o600 {
+	if fi.Mode().Perm() != 0o600 {
 		t.Errorf("mode = %o, want 0600", fi.Mode().Perm())
 	}
 

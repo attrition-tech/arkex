@@ -8,6 +8,7 @@ import (
 	glamouransi "charm.land/glamour/v2/ansi"
 	"charm.land/lipgloss/v2"
 	"charm.land/lipgloss/v2/table"
+	"github.com/alecthomas/chroma/v2/lexers"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
@@ -43,13 +44,31 @@ func (r *tableMarkdownRenderer) Render(input string) (string, error) {
 	source := []byte(input)
 	doc := md.Parser().Parse(text.NewReader(source))
 	var tables []*extast.Table
+	var plainFences []*ast.FencedCodeBlock
 	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if code, ok := n.(*ast.FencedCodeBlock); ok && entering {
+			if lexers.Get(string(code.Language(source))) == nil {
+				plainFences = append(plainFences, code)
+			}
+		}
 		if t, ok := n.(*extast.Table); ok && entering {
 			tables = append(tables, t)
 			return ast.WalkSkipChildren, nil
 		}
 		return ast.WalkContinue, nil
 	})
+	for _, code := range plainFences {
+		// Chroma otherwise guesses a lexer from the body. Only an explicit,
+		// recognized label should enable syntax highlighting. Goldmark caches
+		// Language, so replace the node rather than changing its Info in place.
+		// Leave room for Goldmark to materialize a missing EOF newline.
+		start := len(source)
+		source = append(source, []byte("\ntext\n")...)
+		plain := ast.NewFencedCodeBlock(ast.NewTextSegment(text.NewSegment(start+1, len(source)-1)))
+		plain.SetLines(code.Lines())
+		plain.SetBlankPreviousLines(code.HasBlankPreviousLines())
+		code.Parent().ReplaceChild(code.Parent(), code, plain)
+	}
 	for _, t := range tables {
 		body, err := r.renderTable(t, source, styles)
 		if err != nil {

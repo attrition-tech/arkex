@@ -6,6 +6,8 @@ import (
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/attrition-tech/arkex/internal/tools"
 )
 
 // Problem is one finding from Check.
@@ -97,10 +99,19 @@ var (
 	knownUI         = []string{"mouse", "theme"}
 	knownAPIs       = []string{string(APIOpenAICompat), string(APIOpenAI), string(APIAnthropic), string(APIGoogle)}
 	knownThinking   = []string{string(ThinkingReasoningEffort), string(ThinkingDeepSeek), string(ThinkingQwen), string(ThinkingQwenChatTemplate), string(ThinkingOpenRouter)}
-	knownPerms      = []string{string(PermissionAsk), string(PermissionAllow), string(PermissionDeny)}
+	knownPerms      = []string{string(PermissionAllow), string(PermissionDeny)}
 	// KnownTools lists the built-in tool names permissions may refer to.
-	KnownTools = []string{"read", "edit", "write", "bash"}
+	KnownTools = builtinToolNames()
 )
+
+func builtinToolNames() []string {
+	all := tools.Default("").All()
+	names := make([]string, 0, len(all))
+	for _, tool := range all {
+		names = append(names, tool.Name())
+	}
+	return names
+}
 
 // checkFile validates one file: syntax, types, version, unknown keys and
 // per-connection sanity. Structural problems stop the check early because
@@ -128,6 +139,23 @@ func checkFile(path string) []Problem {
 	case from < CurrentVersion:
 		c.warnf("version", "file is version %d; the next edit upgrades it to %d (or run: arkex config migrate)", from, CurrentVersion)
 	}
+	// Validate permissions after migration so legacy "ask" values are seen
+	// as their version-3 "allow" equivalent. Replace invalid values only in
+	// this checking copy so the remaining diagnostics can still be reported.
+	_, _ = Migrate(root)
+	if perms, ok := root["permissions"].(map[string]any); ok {
+		for _, tool := range sortedKeys(perms) {
+			where := "permissions." + tool
+			if !contains(KnownTools, tool) {
+				c.warnf(where, "unknown tool %q%s", tool, suggest(tool, KnownTools))
+			}
+			if v, _ := perms[tool].(string); !contains(knownPerms, v) {
+				c.errorf(where, "should be one of %s, got %q", strings.Join(knownPerms, ", "), v)
+				perms[tool] = string(PermissionDeny)
+			}
+		}
+	}
+	data, _ = json.Marshal(root)
 	var cfg Config
 	if err := decode(path, data, &cfg); err != nil {
 		c.out = append(c.out, Problem{Level: "error", Msg: err.Error()})
@@ -157,17 +185,6 @@ func checkFile(path string) []Problem {
 			c.unknownKeys(where, pm, knownProfile)
 			if m, _ := pm["model"].(string); !strings.Contains(m, "/") {
 				c.errorf(where+".model", "should be \"provider/model-id\", got %q", m)
-			}
-		}
-	}
-	if perms, ok := root["permissions"].(map[string]any); ok {
-		for _, tool := range sortedKeys(perms) {
-			where := "permissions." + tool
-			if !contains(KnownTools, tool) {
-				c.warnf(where, "unknown tool %q%s", tool, suggest(tool, KnownTools))
-			}
-			if v, _ := perms[tool].(string); !contains(knownPerms, v) {
-				c.errorf(where, "should be one of %s, got %q", strings.Join(knownPerms, ", "), v)
 			}
 		}
 	}

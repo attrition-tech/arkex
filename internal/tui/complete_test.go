@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/attrition-tech/arkex/internal/agent"
 )
 
 func TestWordAt(t *testing.T) {
@@ -69,7 +67,7 @@ func TestExpandMentions(t *testing.T) {
 }
 
 func TestFileCompletionFlow(t *testing.T) {
-	m := newModel(Options{Cwd: t.TempDir(), Mode: agent.NewModePolicy(agent.ModeBuild, nil)})
+	m := newModel(Options{Cwd: t.TempDir()})
 	m.width, m.height = 100, 30
 	m.files = []string{"internal/tui/app.go", "README.md"}
 

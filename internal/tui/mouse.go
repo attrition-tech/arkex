@@ -37,7 +37,7 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.inputDragging {
 		switch msg.(type) {
 		case tea.MouseMotionMsg:
-			m.input.ExtendSelection(mo.X-2, mo.Y-m.inputY())
+			m.input.ExtendSelection(mo.X-m.inputX(), mo.Y-m.inputY())
 			return m, nil
 		case tea.MouseReleaseMsg:
 			m.input.EndSelection()
@@ -59,6 +59,9 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		// The covered transcript must not receive clicks or selections.
 		m.clearSelection()
 		return m, nil
+	}
+	if cmd, handled := m.welcomeMouse(msg); handled {
+		return m, cmd
 	}
 	switch msg.(type) {
 	case tea.MouseWheelMsg:
@@ -101,7 +104,7 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		clicked, cmd := m.selectRelease()
 		if clicked {
-			if s, ok := m.spanAt(m.vp.YOffset() + mo.Y); ok && s.b.kind == blockUser && s.b.prompt != 0 {
+			if s, ok := m.spanAt(m.vp.YOffset() + mo.Y); ok && !s.workHeader && s.b.kind == blockUser && s.b.prompt != 0 {
 				index := s.b.prompt
 				return m, m.openPaletteSub("Sent prompt", []paletteItem{
 					{title: "Edit and resend…", action: func(m *model) tea.Cmd { return m.requestPromptEdit(index) }},
@@ -122,7 +125,7 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		}
 		m.clearSelection()
 		if m.pal == nil && m.panel == nil && mo.Y >= m.inputY() && mo.Y < m.inputY()+m.input.Height() {
-			m.input.BeginSelection(mo.X-2, mo.Y-m.inputY())
+			m.input.BeginSelection(mo.X-m.inputX(), mo.Y-m.inputY())
 			m.inputDragging = true
 			return m, nil
 		}
@@ -154,7 +157,17 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *model) inputX() int {
+	if m.onWelcome() && m.panel == nil {
+		return m.welcomeGeometry().x + 2
+	}
+	return 2
+}
+
 func (m *model) inputY() int {
+	if m.onWelcome() && m.panel == nil {
+		return m.welcomeGeometry().input
+	}
 	y := m.vp.Height() + 1
 	if len(m.attachments) > 0 {
 		y++

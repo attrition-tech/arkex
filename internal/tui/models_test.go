@@ -3,7 +3,6 @@ package tui
 import (
 	"errors"
 	"os"
-	"runtime"
 	"strings"
 	"testing"
 
@@ -185,7 +184,7 @@ func TestConnectionsAddFlowFormPickerSaveConnect(t *testing.T) {
 	if cfg.Default != "ollama/qwen2.5-coder" {
 		t.Fatalf("default = %q", cfg.Default)
 	}
-	if st, err := os.Stat(m.o.ConfigPath); err != nil || (runtime.GOOS != "windows" && st.Mode().Perm() != 0o600) {
+	if st, err := os.Stat(m.o.ConfigPath); err != nil || st.Mode().Perm() != 0o600 {
 		t.Fatalf("config perms = %v err=%v", st.Mode(), err)
 	}
 	if p.draft.APIKey != "" || p.form != nil {

@@ -12,8 +12,8 @@
 #   ARKEX_R2_ENDPOINT     https://<account-id>.r2.cloudflarestorage.com
 #   AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY   R2 API token (Object Read & Write)
 #
-# Builds run one target at a time (--parallelism 1): 5 concurrent Go link steps
-# exhaust an 8 GB machine.
+# Builds run one target at a time (--parallelism 1) to avoid exhausting an
+# 8 GB machine.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -28,7 +28,7 @@ case "$mode" in
     goreleaser release --snapshot --clean --skip=publish --parallelism 1
     version=$(jq -r .version dist/metadata.json)
     rm -rf "$site" && mkdir -p "$site/v$version"
-    cp dist/arkex_*.tar.gz dist/arkex_*.zip dist/SHA256SUMS dist/SHA256SUMS.sig "$site/v$version/"
+    cp dist/arkex_*.tar.gz dist/SHA256SUMS dist/SHA256SUMS.sig "$site/v$version/"
     cp .release/stable.json .release/install.sh "$site/"
     echo
     echo "static release tree in $site (version $version, base $ARKEX_DOWNLOAD_BASE):"

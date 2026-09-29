@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -64,10 +63,10 @@ func TestToolCardLifecycle(t *testing.T) {
 	// Denied: decision first, then the result must not flip it to ok/error.
 	events(m,
 		agent.ToolCall{ID: "c2", Name: "edit", Input: `{"path":"a.go"}`},
-		agent.ToolDecision{ID: "c2", Name: "edit", Allowed: false, Reason: "plan mode: read-only"},
+		agent.ToolDecision{ID: "c2", Name: "edit", Allowed: false, Reason: "denied by config"},
 		agent.ToolResult{ID: "c2", Name: "edit", Output: "denied", IsError: true},
 	)
-	if c := m.tool("c2"); c.status != "denied" || c.summary != "plan mode: read-only" {
+	if c := m.tool("c2"); c.status != "denied" || c.summary != "denied by config" {
 		t.Fatalf("denied card = %+v", c)
 	}
 	// Error result.
@@ -108,157 +107,15 @@ func TestToolCardLifecycle(t *testing.T) {
 	}
 }
 
-func TestApprovalPromptSwallowsKeysUntilAnswered(t *testing.T) {
+func TestRetryPreviewScrolling(t *testing.T) {
 	m, _ := testModel(t)
 	m.layout()
-	m.running = true
-	baseVP := m.vp.Height()
-
-	ask := func(call agent.ToolCall) chan agent.Answer {
-		reply := make(chan agent.Answer, 1)
-		m.Update(approvalMsg{call: call, reply: reply})
-		return reply
-	}
-	bash := agent.ToolCall{ID: "c1", Name: "bash", Input: `{"command":"echo hi"}`, Grantable: true}
-
-	reply := ask(bash)
-	if m.pending == nil {
-		t.Fatal("no pending prompt")
-	}
-	if v := m.View(); v.Cursor != nil {
-		t.Fatal("cursor shown while the approval prompt is up")
-	}
-	// The box replaces the input and shows what the tool wants to do.
-	plain := ansi.Strip(m.View().Content)
-	for _, want := range []string{"bash needs your permission", "$ echo hi", "Allow", "Allow this session", "Deny", "enter confirm"} {
-		if !strings.Contains(plain, want) {
-			t.Fatalf("prompt missing %q:\n%s", want, plain)
-		}
-	}
-	if strings.Contains(plain, "Ask anything") {
-		t.Fatal("input box still drawn under the prompt")
-	}
-	if m.vp.Height() >= baseVP {
-		t.Fatalf("transcript must shrink for the taller box: %d >= %d", m.vp.Height(), baseVP)
-	}
-	// Ordinary keys must not leak into the input box.
-	typeKeys(m, "x", "z")
-	if m.input.Value() != "" || len(reply) != 0 {
-		t.Fatalf("keys leaked: input=%q replies=%d", m.input.Value(), len(reply))
-	}
-	// Enter takes the marked answer; right moves the mark.
-	typeKeys(m, "right", "enter")
-	if got := <-reply; got != agent.AllowSession || m.pending != nil || m.status != "" {
-		t.Fatalf("right+enter: got=%v pending=%v status=%q", got, m.pending != nil, m.status)
-	}
-	if m.vp.Height() != baseVP {
-		t.Fatalf("layout not restored: %d != %d", m.vp.Height(), baseVP)
-	}
-
-	reply = ask(bash)
-	typeKeys(m, "enter")
-	if got := <-reply; got != agent.AllowOnce {
-		t.Fatalf("enter defaults to allow once, got %v", got)
-	}
-	reply = ask(bash)
-	typeKeys(m, "esc")
-	if got := <-reply; got != agent.Deny || m.pending != nil {
-		t.Fatalf("esc: got=%v pending=%v", got, m.pending != nil)
-	}
-	reply = ask(bash)
-	typeKeys(m, "a")
-	if got := <-reply; got != agent.AllowSession {
-		t.Fatalf("a: got=%v", got)
-	}
-
-	// A boundary prompt is not grantable: no session button, "a" is inert,
-	// and the reason is shown.
-	outside := agent.ToolCall{ID: "c2", Name: "write", Input: `{"path":"/home/x/notes.md"}`, Reason: "writes outside the workspace: ~/notes.md"}
-	reply = ask(outside)
-	plain = ansi.Strip(m.View().Content)
-	if !strings.Contains(plain, "writes outside the workspace: ~/notes.md") || strings.Contains(plain, "this session") {
-		t.Fatalf("boundary prompt wrong:\n%s", plain)
-	}
-	typeKeys(m, "a")
-	if len(reply) != 0 {
-		t.Fatal("a answered a non-grantable prompt")
-	}
-	typeKeys(m, "n")
-	if got := <-reply; got != agent.Deny {
-		t.Fatalf("n: got=%v", got)
-	}
-
-	reply = ask(bash)
-	cancelled := false
-	m.cancel = func() { cancelled = true }
-	typeKeys(m, "ctrl+c", "ctrl+c")
-	if got := <-reply; got != agent.Deny || !cancelled || m.status != "cancelling…" {
-		t.Fatalf("ctrl+c: got=%v cancelled=%v status=%q", got, cancelled, m.status)
-	}
-}
-
-func TestApprovalPromptMouse(t *testing.T) {
-	m, _ := testModel(t)
-	m.layout()
-	m.running = true
-	reply := make(chan agent.Answer, 1)
-	m.Update(approvalMsg{call: agent.ToolCall{ID: "c1", Name: "bash", Input: `{"command":"ls"}`, Grantable: true}, reply: reply})
-	m.View()
-	y := m.approvalButtonY()
-	hits := m.pending.hits
-	if len(hits) != 3 {
-		t.Fatalf("hits = %+v", hits)
-	}
-	// Hover lights the row's button; nothing else changes.
-	m.handleMouse(tea.MouseMotionMsg{X: hits[2].x0, Y: y, Button: tea.MouseNone})
-	if m.pending.hover != 2 || len(reply) != 0 {
-		t.Fatalf("hover=%d replies=%d", m.pending.hover, len(reply))
-	}
-	m.handleMouse(tea.MouseMotionMsg{X: hits[2].x0, Y: y - 1, Button: tea.MouseNone})
-	if m.pending.hover != -1 {
-		t.Fatalf("hover off the row = %d", m.pending.hover)
-	}
-	// A click elsewhere is swallowed; a click on Deny answers.
-	click(m, 0, 0)
-	if len(reply) != 0 || m.pending == nil {
-		t.Fatal("stray click answered the prompt")
-	}
-	click(m, hits[2].x0+1, y)
-	if got := <-reply; got != agent.Deny || m.pending != nil {
-		t.Fatalf("click deny: got=%v pending=%v", got, m.pending != nil)
-	}
-}
-
-func TestApprovalPreview(t *testing.T) {
-	m, _ := testModel(t)
-	m.layout()
-	input, _ := json.Marshal(map[string]any{
-		"path": "missing.go", "old_string": "before\nold", "new_string": "after\nnew\nextra", "replace_all": true,
-	})
-	reply := make(chan agent.Answer, 1)
-	m.Update(approvalMsg{call: agent.ToolCall{Name: "edit", Input: string(input), Grantable: true}, reply: reply})
-	plain := ansi.Strip(m.View().Content)
-	for _, want := range []string{"Proposed replacement · all matches", "- before", "- old", "+ after", "+ extra"} {
-		if !strings.Contains(plain, want) {
-			t.Fatalf("missing %q:\n%s", want, plain)
-		}
-	}
-	frameLines(t, m, "edit preview")
-	typeKeys(m, "n")
-	if <-reply != agent.Deny {
-		t.Fatal("preview changed denial semantics")
-	}
-
-	input, _ = json.Marshal(map[string]any{"path": "new.txt", "content": strings.Repeat("line\n", 30) + "last\x1b[31m"})
-	m.Update(approvalMsg{call: agent.ToolCall{Name: "write", Input: string(input)}, reply: reply})
+	reply := make(chan bool, 1)
+	m.Update(approvalMsg{retry: true, reply: reply})
 	a := m.pending
-	if strings.Contains(a.preview, "\x1b") {
-		t.Fatal("preview contains terminal controls")
-	}
-	plain = ansi.Strip(m.View().Content)
-	if !strings.Contains(plain, "replaces entire file") || !strings.Contains(plain, "of 31") || strings.Contains(plain, "+ last") {
-		t.Fatalf("write preview:\n%s", plain)
-	}
+	a.preview = strings.Repeat("line\n", 30) + "last"
+	a.caption = "Response detail"
+	m.layout()
 	m.Update(tea.KeyPressMsg{Code: tea.KeyPgDown})
 	if a.offset != a.page || len(reply) != 0 {
 		t.Fatalf("page down offset=%d page=%d replies=%d", a.offset, a.page, len(reply))
@@ -268,121 +125,14 @@ func TestApprovalPreview(t *testing.T) {
 		t.Fatal("wheel did not scroll preview")
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyEnd, Mod: tea.ModCtrl})
-	if !strings.Contains(ansi.Strip(m.View().Content), "+ last") {
+	if !strings.Contains(ansi.Strip(m.View().Content), "last") {
 		t.Fatal("last preview line inaccessible")
 	}
 	m.Update(tea.KeyPressMsg{Code: tea.KeyHome, Mod: tea.ModCtrl})
 	if a.offset != 0 {
 		t.Fatal("home did not restore start")
 	}
-	frameLines(t, m, "write preview")
-	typeKeys(m, "n")
-	<-reply
-
-	empty := newApproval(agent.ToolCall{Name: "write", Input: `{"path":"existing","content":""}`}, reply)
-	if empty.preview != "(empty file)" || !strings.Contains(empty.caption, "replaces entire file") {
-		t.Fatal("empty write must still warn about replacement")
-	}
-}
-
-func TestScopedBashApprovalDetails(t *testing.T) {
-	m, _ := testModel(t)
-	m.running = true
-	raw, _ := json.Marshal(map[string]any{"command": strings.Repeat("echo line\n", 30) + "echo LAST_COMMAND"})
-	call := agent.ToolCall{Name: "bash", Input: string(raw), Grantable: true,
-		TrustDirectory: "/outside/shared", TrustAccess: "read, changes and shell path checks",
-		Reason:  "command names a path outside the workspace: /outside/shared/file",
-		Workdir: "/workspace/falak"}
-	for _, size := range [][2]int{{120, 36}, {60, 24}, {24, 8}, {120, 36}} {
-		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
-		reply := make(chan agent.Answer, 1)
-		m.Update(approvalMsg{call: call, reply: reply})
-		frameLines(t, m, "scoped approval")
-		if size[0] == 120 {
-			plain := ansi.Strip(m.View().Content)
-			for _, want := range []string{"Trust directory", "/outside/shared", "until arkex exits", "/workspace/falak", "not a sandbox"} {
-				if !strings.Contains(plain, want) {
-					t.Fatalf("missing %q:\n%s", want, plain)
-				}
-			}
-			m.Update(tea.KeyPressMsg{Code: tea.KeyEnd, Mod: tea.ModCtrl})
-			if !strings.Contains(ansi.Strip(m.View().Content), "LAST_COMMAND") {
-				t.Fatal("command tail unavailable")
-			}
-		}
-		if a, ok := m.pending.byKey("enter"); !ok || a != agent.AllowOnce {
-			t.Fatal("default must remain Allow once")
-		}
-		typeKeys(m, "a")
-		if <-reply != agent.AllowSession {
-			t.Fatal("trust shortcut broken")
-		}
-	}
-}
-
-func TestApprovalCompactGeometryAndHits(t *testing.T) {
-	m, _ := testModel(t)
-	m.running = true
-	input, _ := json.Marshal(map[string]any{"path": "src/long-name.go", "old_string": strings.Repeat("removed ", 40), "new_string": "replacement\nlast"})
-	for _, size := range [][2]int{{120, 34}, {60, 20}, {40, 20}, {80, 24}, {60, 20}} {
-		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
-		for selected := 0; selected < 3; selected++ {
-			reply := make(chan agent.Answer, 1)
-			m.Update(approvalMsg{call: agent.ToolCall{Name: "edit", Input: string(input), Grantable: true}, reply: reply})
-			m.pending.sel = selected
-			lines := frameLines(t, m, "compact approval")
-			if m.vp.Height() < 4 || !strings.Contains(ansi.Strip(lines[len(lines)-2]), "BUILD") {
-				t.Fatal("approval displaced transcript or footer")
-			}
-			for _, h := range m.pending.hits {
-				y := m.approvalButtonY() + h.y
-				label := ansi.Cut(ansi.Strip(lines[y]), h.x0, h.x1)
-				if !strings.Contains(label, m.pending.buttons[h.idx].label) {
-					t.Fatalf("%v hit %+v covers %q", size, h, label)
-				}
-			}
-			hit := m.pending.hits[selected]
-			y := m.approvalButtonY() + hit.y
-			motion(m, hit.x0+1, y)
-			if m.pending.hover != selected {
-				t.Fatal("hover missed wrapped action")
-			}
-			want := m.pending.buttons[selected].answer
-			click(m, hit.x0+1, y)
-			if got := <-reply; got != want {
-				t.Fatalf("clicked answer %v, want %v", got, want)
-			}
-			frameLines(t, m, "after approval")
-		}
-	}
-	// Resize a live, scrolled preview, not only newly created prompts.
-	m.Update(approvalMsg{call: agent.ToolCall{Name: "edit", Input: string(input), Reason: "writes outside the workspace: /outside/long-name.go"}, reply: make(chan agent.Answer, 1)})
-	m.Update(tea.KeyPressMsg{Code: tea.KeyEnd, Mod: tea.ModCtrl})
-	m.Update(tea.WindowSizeMsg{Width: 120, Height: 34})
-	frameLines(t, m, "resized preview")
-	if !strings.Contains(ansi.Strip(m.View().Content), "+ last") {
-		t.Fatal("resize lost the end of the preview")
-	}
-}
-
-func TestApprovedCardSaysByYou(t *testing.T) {
-	m, _ := testModel(t)
-	m.layout()
-	m.applyEvent(agent.ToolCall{ID: "t1", Name: "bash", Input: `{"command":"ls"}`})
-	m.applyEvent(agent.ToolDecision{ID: "t1", Name: "bash", Allowed: true, Reason: "approved by user for this session"})
-	m.applyEvent(agent.ToolResult{ID: "t1", Name: "bash", Output: "a\n"})
-	m.applyEvent(agent.ToolCall{ID: "t2", Name: "bash", Input: `{"command":"pwd"}`})
-	m.applyEvent(agent.ToolDecision{ID: "t2", Name: "bash", Allowed: true, Reason: "auto mode"})
-	m.applyEvent(agent.ToolResult{ID: "t2", Name: "bash", Output: "/x\n"})
-	m.refresh()
-	lines := m.renderBlocks(100)
-	plain := ansi.Strip(strings.Join(lines, "\n"))
-	if !strings.Contains(plain, "by you · session") {
-		t.Fatalf("approved card lacks the note:\n%s", plain)
-	}
-	if strings.Count(plain, "by you") != 1 {
-		t.Fatalf("policy-allowed card must not say by you:\n%s", plain)
-	}
+	frameLines(t, m, "retry preview")
 }
 
 // frameLines splits a View into lines and checks the frame is exactly the
@@ -416,7 +166,7 @@ func TestViewFrameGeometryAndCursor(t *testing.T) {
 	if v.Cursor == nil || v.Cursor.Y != 26 || v.Cursor.X != 2 {
 		t.Fatalf("cursor = %+v", v.Cursor)
 	}
-	if !strings.Contains(ansi.Strip(lines[28]), "BUILD") {
+	if !strings.Contains(ansi.Strip(lines[28]), "no model ▾") || strings.Contains(ansi.Strip(lines[28]), "BUILD") {
 		t.Fatalf("toolbar not on row 28: %q", ansi.Strip(lines[28]))
 	}
 	if !strings.HasSuffix(ansi.Strip(lines[29]), "/ or cmd+p for command palette") {

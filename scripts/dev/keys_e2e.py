@@ -57,11 +57,11 @@ with tempfile.TemporaryDirectory(prefix="arkex-keys-") as temp:
     (home / "config.json").write_text((repo / "scripts/fake_config.json").read_text())
     cmd = "env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE " + " ".join(shlex.quote(x) for x in [
         "TERM=xterm-256color", "COLORTERM=truecolor", "HOME=" + temp, "ARKEX_HOME=" + temp,
-        "SHELL=/bin/sh", binary, "--mode", "auto"])
+        "SHELL=/bin/sh", binary])
     try:
         tmux("new-session", "-d", "-s", "test", "-x", "120", "-y", "36", "-c", temp, cmd)
         tmux("set-option", "-t", "test", "remain-on-exit", "on")
-        wait(lambda s: "command palette" in s, "startup")
+        wait(lambda s: "Ask a question, describe a task" in s, "startup")
         for prompt in ["ping first", "ping second"]:
             before = screen().count("pong")
             text(prompt)

@@ -58,16 +58,11 @@ func TestResolvePath(t *testing.T) {
 		t.Fatalf("relative = %q", got)
 	}
 	absolute := filepath.Join(string(filepath.Separator), "etc", "hosts")
-	wantAbsolute := absolute
-	if volume := filepath.VolumeName(root); volume != "" {
-		wantAbsolute = volume + absolute
-	}
-	if got, _ := resolvePath(root, absolute); got != wantAbsolute {
+	if got, _ := resolvePath(root, absolute); got != absolute {
 		t.Fatalf("absolute = %q", got)
 	}
 	home := filepath.Join(root, "home", "tester")
 	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
 	if got, _ := resolvePath(root, "~/notes/x.md"); got != filepath.Join(home, "notes", "x.md") {
 		t.Fatalf("tilde = %q", got)
 	}
@@ -395,7 +390,7 @@ func TestRegistryOrderLookupAndDuplicatePanic(t *testing.T) {
 	for _, tl := range r.All() {
 		names = append(names, tl.Name())
 	}
-	if strings.Join(names, ",") != "read,write,edit,bash" {
+	if strings.Join(names, ",") != "read,write,edit,bash,packages" {
 		t.Fatalf("order = %v", names)
 	}
 	if _, ok := r.Get("edit"); !ok {
@@ -404,7 +399,7 @@ func TestRegistryOrderLookupAndDuplicatePanic(t *testing.T) {
 	if _, ok := r.Get("rm"); ok {
 		t.Fatal("unknown tool found")
 	}
-	if ft := r.Fantasy(); len(ft) != 4 {
+	if ft := r.Fantasy(); len(ft) != 5 {
 		t.Fatalf("fantasy tools = %d", len(ft))
 	}
 	defer func() {

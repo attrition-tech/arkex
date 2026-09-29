@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -316,10 +315,10 @@ func TestStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if perm := st.Mode().Perm(); runtime.GOOS != "windows" && perm != 0o600 {
+	if perm := st.Mode().Perm(); perm != 0o600 {
 		t.Fatalf("auth.json mode %o", perm)
 	}
-	if dst, _ := os.Stat(filepath.Dir(s.Path)); runtime.GOOS != "windows" && dst.Mode().Perm() != 0o700 {
+	if dst, _ := os.Stat(filepath.Dir(s.Path)); dst.Mode().Perm() != 0o700 {
 		t.Fatalf("dir mode %o", dst.Mode().Perm())
 	}
 	got, ok, err := s.Get("a")
@@ -614,8 +613,7 @@ func TestTransportRefreshPersistenceFailureKeepsOldTokens(t *testing.T) {
 	freshAccess := accessJWT(t, time.Now().Add(2*time.Hour))
 	auth := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Store.Update has read the account before it calls Refresh. Replace
-		// the target with a directory so atomic replacement fails without
-		// deleting the open lock file (which Windows forbids).
+		// the target with a directory so atomic replacement fails.
 		if err := os.Remove(store.Path); err != nil {
 			t.Errorf("remove store target: %v", err)
 		}

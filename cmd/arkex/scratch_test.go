@@ -78,7 +78,7 @@ func TestCLIScratchWriteBashAndCleanup(t *testing.T) {
 		if err := config.SaveConnection(path, "fake", config.Connection{API: config.APIOpenAICompat, BaseURL: server.URL + "/v1", APIKey: "test", Models: []config.Model{{ID: "m"}}}, "fake/m"); err != nil {
 			t.Fatal(err)
 		}
-		err := runRoot(t.Context(), rootFlags{print: "exercise scratch", mode: "auto", json: jsonMode}, nil)
+		err := runRoot(t.Context(), rootFlags{print: "exercise scratch", json: jsonMode}, nil)
 		server.Close()
 		if err != nil {
 			t.Fatal(err)

@@ -36,13 +36,13 @@ func TestPrintResumeUsesSavedModelUnlessOverridden(t *testing.T) {
 				t.Fatal(err)
 			}
 			s := session.New(cwd)
-			s.Update([]fantasy.Message{fantasy.NewUserMessage("saved prompt")}, "local/a:high", "build", 0, 0)
+			s.Update([]fantasy.Message{fantasy.NewUserMessage("saved prompt")}, session.Usage{Model: "local/a:high"})
 			effort := "high"
 			s.Effort = &effort
 			if err := s.Save(); err != nil {
 				t.Fatal(err)
 			}
-			if err := runRoot(t.Context(), rootFlags{resume: s.ID, model: override, print: "continue", mode: "build", noTools: true}, nil); err != nil {
+			if err := runRoot(t.Context(), rootFlags{resume: s.ID, model: override, print: "continue", noTools: true}, nil); err != nil {
 				t.Fatal(err)
 			}
 			wantModel, wantEffort := "a", "high"
@@ -79,12 +79,12 @@ func TestPrintAndJSONResumeAccumulateUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := session.New(cwd)
-	s.Update([]fantasy.Message{fantasy.NewUserMessage("saved")}, "local/a", "build", 9, 4)
+	s.Update([]fantasy.Message{fantasy.NewUserMessage("saved")}, session.Usage{Model: "local/a", Input: 9, Output: 4})
 	if err := s.Save(); err != nil {
 		t.Fatal(err)
 	}
 	for i, jsonMode := range []bool{false, true} {
-		if err := runRoot(t.Context(), rootFlags{resume: s.ID, print: "continue", json: jsonMode, mode: "build", noTools: true}, nil); err != nil {
+		if err := runRoot(t.Context(), rootFlags{resume: s.ID, print: "continue", json: jsonMode, noTools: true}, nil); err != nil {
 			t.Fatal(err)
 		}
 		saved, err := session.Load(cwd, s.ID)

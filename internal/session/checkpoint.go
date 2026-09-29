@@ -66,7 +66,7 @@ func (s *Session) Fork(index int) (*Session, error) {
 	next := New(s.Cwd)
 	next.ParentID = s.ID
 	next.Title = s.Title + " (edited)"
-	next.Model, next.Mode, next.Effort = p.Model, s.Mode, s.Effort
+	next.Model, next.Effort = p.Model, s.Effort
 	next.History = append([]fantasy.Message(nil), s.History[:p.End]...)
 	next.ContextStart = p.Start
 	next.Messages = append([]fantasy.Message(nil), s.History[p.Start:p.End]...)

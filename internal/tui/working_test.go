@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/attrition-tech/arkex/internal/agent"
@@ -121,6 +122,52 @@ func TestLatestThinkingAndArchive(t *testing.T) {
 	}
 	if m.openDetail != m.blocks[1] || m.openWork != m.blocks[0] {
 		t.Fatal("archive inspection moved")
+	}
+}
+
+func TestEarlierThinkingMouseClickDoesNotEditPrompt(t *testing.T) {
+	m := rollingModel(t, 65)
+	m.rollAt = time.Time{}
+	prompt := newBlock(blockUser, "First point\nSecond point\nThird point\nFourth point")
+	prompt.prompt = 1 // Real sent prompts have an edit target; synthetic blocks may not.
+	m.blocks[0] = prompt
+	m.blocks[1].name = "Archived thought"
+	m.setInput("keep this draft")
+	m.refresh()
+	clickRow := func(header bool) {
+		t.Helper()
+		for _, s := range m.spans {
+			if s.b != prompt || s.workHeader != header {
+				continue
+			}
+			m.stickBottom = false
+			m.vp.ScrollDown(max(0, s.top-2) - m.vp.YOffset())
+			y := s.top - m.vp.YOffset()
+			m.Update(tea.MouseMotionMsg{X: 4, Y: y})
+			m.View()
+			m.Update(tea.MouseClickMsg{X: 4, Y: y, Button: tea.MouseLeft})
+			m.Update(tea.MouseReleaseMsg{X: 4, Y: y, Button: tea.MouseLeft})
+			return
+		}
+		t.Fatal("missing click target")
+	}
+	clickRow(true)
+	if m.pal != nil || m.editingPrompt != nil || m.openWork != prompt {
+		t.Fatal("archive click opened prompt actions instead of earlier thinking")
+	}
+	if !strings.Contains(transcript(m), "Earlier thinking · 64 sections") || !strings.Contains(transcript(m), "Archived thought") {
+		t.Fatal("archive contents did not become visible", transcript(m))
+	}
+	clickRow(true)
+	if m.pal != nil || m.openWork != nil || strings.Contains(transcript(m), "Archived thought") {
+		t.Fatal("second archive click did not collapse earlier thinking")
+	}
+	if m.input.Value() != "keep this draft" || !m.running {
+		t.Fatal("archive clicks changed the draft or interrupted the run")
+	}
+	clickRow(false)
+	if m.pal == nil || m.pal.level().title != "Sent prompt" || m.pal.view[0].title != "Edit and resend…" {
+		t.Fatal("clicking the actual prompt no longer opens prompt actions")
 	}
 }
 

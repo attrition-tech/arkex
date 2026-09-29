@@ -21,15 +21,14 @@ type Theme struct {
 	Name string
 	Desc string
 
-	Accent   color.Color // headings, user bar, build mode, selection
+	Accent   color.Color // headings, user bar, selection
 	Muted    color.Color // dim text, borders, reasoning
 	Text     color.Color // tool output body
-	OnAccent color.Color // text drawn on Accent/Plan/Auto/Status backgrounds
+	OnAccent color.Color // text drawn on Accent/Status backgrounds
 	Tool     color.Color // tool names
 	OK       color.Color // success, added lines
 	Err      color.Color // errors, removed lines
-	Warn     color.Color // auto mode badge
-	Plan     color.Color // plan mode badge
+	Warn     color.Color // warnings and context gauge
 	StatusBg color.Color // status bar background
 	StatusFg color.Color // status bar text
 	HoverBg  color.Color // fill under the row or control the mouse is over
@@ -43,43 +42,43 @@ var themes = []Theme{
 	{
 		Name: "default", Desc: "warm gray text with your terminal's accent colours",
 		Accent: c("12"), Muted: c("8"), Text: c("#b7b1a3"), OnAccent: c("0"), Tool: c("6"),
-		OK: c("2"), Err: c("1"), Warn: c("11"), Plan: c("14"), StatusBg: c("4"), StatusFg: c("0"), HoverBg: c("236"),
+		OK: c("2"), Err: c("1"), Warn: c("11"), StatusBg: c("4"), StatusFg: c("0"), HoverBg: c("236"),
 		Markdown: styles.DarkStyleConfig,
 	},
 	{
 		Name: "light", Desc: "terminal colours tuned for a light background",
 		Accent: c("4"), Muted: c("8"), Text: c("0"), OnAccent: c("15"), Tool: c("6"),
-		OK: c("2"), Err: c("1"), Warn: c("3"), Plan: c("6"), StatusBg: c("4"), StatusFg: c("15"), HoverBg: c("254"),
+		OK: c("2"), Err: c("1"), Warn: c("3"), StatusBg: c("4"), StatusFg: c("15"), HoverBg: c("254"),
 		Markdown: styles.LightStyleConfig,
 	},
 	{
 		Name: "catppuccin", Desc: "Catppuccin Mocha",
 		Accent: c("#89b4fa"), Muted: c("#6c7086"), Text: c("#cdd6f4"), OnAccent: c("#1e1e2e"), Tool: c("#94e2d5"),
-		OK: c("#a6e3a1"), Err: c("#f38ba8"), Warn: c("#f9e2af"), Plan: c("#cba6f7"), StatusBg: c("#313244"), StatusFg: c("#cdd6f4"), HoverBg: c("#313244"),
+		OK: c("#a6e3a1"), Err: c("#f38ba8"), Warn: c("#f9e2af"), StatusBg: c("#313244"), StatusFg: c("#cdd6f4"), HoverBg: c("#313244"),
 		Markdown: styles.DarkStyleConfig,
 	},
 	{
 		Name: "dracula", Desc: "Dracula",
 		Accent: c("#bd93f9"), Muted: c("#6272a4"), Text: c("#f8f8f2"), OnAccent: c("#282a36"), Tool: c("#8be9fd"),
-		OK: c("#50fa7b"), Err: c("#ff5555"), Warn: c("#f1fa8c"), Plan: c("#ff79c6"), StatusBg: c("#44475a"), StatusFg: c("#f8f8f2"), HoverBg: c("#44475a"),
+		OK: c("#50fa7b"), Err: c("#ff5555"), Warn: c("#f1fa8c"), StatusBg: c("#44475a"), StatusFg: c("#f8f8f2"), HoverBg: c("#44475a"),
 		Markdown: styles.DraculaStyleConfig,
 	},
 	{
 		Name: "gruvbox", Desc: "Gruvbox dark",
 		Accent: c("#83a598"), Muted: c("#928374"), Text: c("#ebdbb2"), OnAccent: c("#282828"), Tool: c("#8ec07c"),
-		OK: c("#b8bb26"), Err: c("#fb4934"), Warn: c("#fabd2f"), Plan: c("#d3869b"), StatusBg: c("#3c3836"), StatusFg: c("#ebdbb2"), HoverBg: c("#3c3836"),
+		OK: c("#b8bb26"), Err: c("#fb4934"), Warn: c("#fabd2f"), StatusBg: c("#3c3836"), StatusFg: c("#ebdbb2"), HoverBg: c("#3c3836"),
 		Markdown: styles.DarkStyleConfig,
 	},
 	{
 		Name: "nord", Desc: "Nord",
 		Accent: c("#88c0d0"), Muted: c("#4c566a"), Text: c("#d8dee9"), OnAccent: c("#2e3440"), Tool: c("#8fbcbb"),
-		OK: c("#a3be8c"), Err: c("#bf616a"), Warn: c("#ebcb8b"), Plan: c("#b48ead"), StatusBg: c("#3b4252"), StatusFg: c("#d8dee9"),
+		OK: c("#a3be8c"), Err: c("#bf616a"), Warn: c("#ebcb8b"), StatusBg: c("#3b4252"), StatusFg: c("#d8dee9"),
 		Markdown: styles.DarkStyleConfig,
 	},
 	{
 		Name: "tokyo-night", Desc: "Tokyo Night",
 		Accent: c("#7aa2f7"), Muted: c("#565f89"), Text: c("#c0caf5"), OnAccent: c("#1a1b26"), Tool: c("#7dcfff"),
-		OK: c("#9ece6a"), Err: c("#f7768e"), Warn: c("#e0af68"), Plan: c("#bb9af7"), StatusBg: c("#292e42"), StatusFg: c("#c0caf5"),
+		OK: c("#9ece6a"), Err: c("#f7768e"), Warn: c("#e0af68"), StatusBg: c("#292e42"), StatusFg: c("#c0caf5"),
 		Markdown: styles.TokyoNightStyleConfig,
 	},
 }
@@ -147,9 +146,6 @@ func applyTheme(t Theme) {
 	dimStyle = base.Foreground(t.Muted)
 	addStyle = base.Foreground(t.OK)
 	delStyle = base.Foreground(t.Err)
-	modeBuildStyle = base.Foreground(t.OnAccent).Background(t.Accent).Bold(true).Padding(0, 1)
-	modePlanStyle = base.Foreground(t.OnAccent).Background(t.Plan).Bold(true).Padding(0, 1)
-	modeAutoStyle = base.Foreground(t.OnAccent).Background(t.Warn).Bold(true).Padding(0, 1)
 	borderStyle = base.Border(lipgloss.RoundedBorder()).BorderForeground(t.Muted).Padding(0, 1)
 	pillStyle = base.Foreground(t.Text).Background(t.HoverBg).Padding(0, 1)
 	pillHoverStyle = base.Foreground(t.OnAccent).Background(t.Text).Padding(0, 1)

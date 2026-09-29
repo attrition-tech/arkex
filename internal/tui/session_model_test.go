@@ -51,7 +51,7 @@ func sessionModelHarness(t *testing.T) (*harness, *session.Session) {
 	m.setSession(curr)
 	m.sess.Agent.SetMessages([]fantasy.Message{fantasy.NewUserMessage("current conversation")})
 	s := session.New(m.o.Cwd)
-	s.Update(sampleMessages(), "local/a:high", "plan", 71, 19)
+	s.Update(sampleMessages(), session.Usage{Model: "local/a:high", Input: 71, Output: 19})
 	s.LastInput = 33
 	high := "high"
 	s.Effort = &high
@@ -120,7 +120,7 @@ func TestResumeRestoresModelWithoutChangingDefault(t *testing.T) {
 	if h.sess.Agent.LastInput() != 33 {
 		t.Fatalf("resume lost compaction measurement: %d", h.sess.Agent.LastInput())
 	}
-	if h.sess.Name != "local/a:high" || h.sess.Agent.Model.Ref.Thinking != "high" || h.conv.ID != s.ID || h.lastInput != 33 || h.mode() != agent.ModePlan {
+	if h.sess.Name != "local/a:high" || h.sess.Agent.Model.Ref.Thinking != "high" || h.conv.ID != s.ID || h.lastInput != 33 {
 		t.Fatalf("wrong restored session: model=%s effort=%s", h.sess.Name, h.sess.Agent.Model.Ref.Thinking)
 	}
 	if len(h.sess.Agent.Messages()) != len(s.Messages) {
@@ -136,7 +136,7 @@ func TestResumeRestoresModelWithoutChangingDefault(t *testing.T) {
 		t.Fatal("new session did not use default with empty history")
 	}
 	// Startup resume does not require a working default connection first.
-	fresh := newModel(Options{Cwd: h.o.Cwd, ConfigPath: h.o.ConfigPath, Connect: h.o.Connect, Resume: s.ID, Mode: agent.NewModePolicy(agent.ModeBuild, nil)})
+	fresh := newModel(Options{Cwd: h.o.Cwd, ConfigPath: h.o.ConfigPath, Connect: h.o.Connect, Resume: s.ID})
 	(&harness{model: fresh}).drive(fresh.Init())
 	if fresh.sess.Name != "local/a:high" || fresh.conv.ID != s.ID {
 		t.Fatal("startup resume used default")

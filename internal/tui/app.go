@@ -19,7 +19,6 @@ import (
 	"github.com/attrition-tech/arkex/internal/agent"
 	"github.com/attrition-tech/arkex/internal/chatgpt"
 	"github.com/attrition-tech/arkex/internal/config"
-	"github.com/attrition-tech/arkex/internal/prompt"
 	"github.com/attrition-tech/arkex/internal/sanitize"
 	"github.com/attrition-tech/arkex/internal/session"
 )
@@ -48,11 +47,6 @@ type Options struct {
 	Session Connection
 	Cwd     string
 	Version string
-	// Asker, when set, is bound to the running program so the agent's
-	// policy can prompt the user for tool approval.
-	Asker *Asker
-	// Mode is the shared mode switch (plan/build/auto). Required.
-	Mode *agent.ModePolicy
 	// Connect builds a fresh agent for a model selector. Used by /model and
 	// the Connections panel.
 	Connect func(ctx context.Context, selector string) (Connection, error)
@@ -98,9 +92,6 @@ func Run(ctx context.Context, o Options) (err error) {
 	p := tea.NewProgram(m, tea.WithContext(ctx), tea.WithFPS(targetFPS))
 	m.program = p
 	m.send = p.Send
-	if o.Asker != nil {
-		o.Asker.p = p
-	}
 	_, err = p.Run()
 	if errors.Is(err, tea.ErrProgramKilled) || errors.Is(err, context.Canceled) {
 		return nil
@@ -112,7 +103,7 @@ func Run(ctx context.Context, o Options) (err error) {
 
 type approvalMsg struct {
 	call    agent.ToolCall
-	reply   chan agent.Answer
+	reply   chan bool
 	retry   bool
 	partial bool
 	err     error
@@ -124,29 +115,6 @@ type runDoneMsg struct{ err error }
 type compactDoneMsg struct {
 	res agent.CompactResult
 	err error
-}
-
-// Asker implements agent.Asker by round-tripping an approval prompt through
-// the Bubble Tea program. Create it with NewAsker, hand it to the policy,
-// and pass it in Options so Run can bind it.
-type Asker struct{ p *tea.Program }
-
-// NewAsker returns an unbound Asker.
-func NewAsker() *Asker { return &Asker{} }
-
-// Ask implements agent.Asker.
-func (a *Asker) Ask(ctx context.Context, call agent.ToolCall) (agent.Answer, error) {
-	if a.p == nil {
-		return agent.Deny, errors.New("tui: approval requested before the program started")
-	}
-	reply := make(chan agent.Answer, 1)
-	a.p.Send(approvalMsg{call: call, reply: reply})
-	select {
-	case ans := <-reply:
-		return ans, nil
-	case <-ctx.Done():
-		return agent.Deny, ctx.Err()
-	}
 }
 
 // ---- model ----
@@ -300,7 +268,9 @@ type model struct {
 	hist           *history         // prompt history for this directory
 	shellNotes     []shellNote      // !cmd results waiting to ride along with the next prompt
 	shellSeq       int
-	welcome        *block       // banner block; the transcript is reset to it by /new
+	welcome        *block // banner block; the transcript is reset to it by /new
+	start          welcomeScreen
+	welcomeLayout  bool         // whether the last layout used the welcome composer
 	attachments    []attachment // images queued for the next prompt (chips above the input)
 	chipHits       []chipHit    // × positions from the last chip row draw
 	hoverChip      int          // hovered remove button, attachment index + 1; zero means none
@@ -351,6 +321,7 @@ func newModel(o Options) *model {
 	applyTheme(t)
 	m.applyInputStyles()
 	m.welcome = newBlock(blockSystem, "")
+	m.start.greeting = pickWelcomeGreeting(time.Now())
 	m.renderWelcome()
 	m.blocks = append(m.blocks, m.welcome)
 	if !knownTheme {
@@ -359,14 +330,13 @@ func newModel(o Options) *model {
 	m.hist = loadHistory(o.Cwd)
 	if o.Resume != "" {
 		m.startupCmd = m.resumeWithModel(o.Resume, o.ResumeModel)
-	} else if o.Session.Agent == nil {
-		m.openModels(o.StartupNote)
+	} else if o.StartupNote != "" {
+		m.flash(o.StartupNote)
 	}
 	return m
 }
 
-// setSession swaps the active agent and remembers its base system prompt
-// so mode notes can be appended per request.
+// setSession swaps the active agent and remembers its base system prompt.
 func (m *model) setSession(c Connection) {
 	m.sess = c
 	if c.Agent == nil {
@@ -375,19 +345,6 @@ func (m *model) setSession(c Connection) {
 		return
 	}
 	m.baseSystem = c.Agent.System
-}
-
-func (m *model) mode() agent.Mode {
-	if m.o.Mode == nil {
-		return agent.ModeBuild
-	}
-	return m.o.Mode.Mode()
-}
-
-func (m *model) setMode(md agent.Mode) {
-	if m.o.Mode != nil {
-		m.o.Mode.SetMode(md)
-	}
 }
 
 // newBlock allocates a block with initial text. strings.Builder must never
@@ -463,9 +420,12 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 	case approvalMsg:
 		m.disarmConfirmation()
 		m.promptFocus = nil
-		m.pending = newApproval(msg.call, msg.reply)
 		if msg.retry {
+			m.pending = newRetry(msg.call, msg.reply)
 			m.pending.retry = true
+			if msg.err != nil {
+				m.pending.reason = "Completed tools are preserved. " + msg.err.Error()
+			}
 			m.closePalette()
 			m.closeModels()
 			m.pending.title = "Connection still unavailable · 3 retries exhausted"
@@ -477,7 +437,9 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 			} else if errors.Is(msg.err, agent.ErrMalformedToolResponse) {
 				m.pending.title = "Malformed tool response · 2 retries exhausted"
 			}
-			m.pending.buttons = []approveButton{{label: "Try again", keys: "enter", answer: agent.AllowOnce}, {label: "Cancel", keys: "esc ×2", answer: agent.Deny}}
+			m.pending.buttons = []approveButton{{label: "Try again", keys: "enter", answer: true}, {label: "Cancel", keys: "esc ×2", answer: false}}
+		} else {
+			return m, nil
 		}
 		m.status = ""
 		m.layout() // the box replaces the input and may be taller
@@ -582,6 +544,9 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 		if m.pending != nil || m.panel != nil {
 			return m, nil
 		}
+		if m.onWelcome() {
+			m.focusWelcome(0)
+		}
 		// A dropped image file arrives as its path: make it a chip.
 		if name, ok := pastedImagePath(m.o.Cwd, p.Content); ok {
 			if err := m.attach(name); err != nil {
@@ -631,7 +596,7 @@ func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.pending.scroll(len(m.pending.lines))
 		case "ctrl+c":
 			if m.confirmDanger(key) {
-				m.answerPending(agent.Deny)
+				m.answerPending(false)
 				m.cancelRun()
 			}
 		default:
@@ -653,6 +618,9 @@ func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if cmd, ok := m.compKey(k); ok {
+		return m, cmd
+	}
+	if cmd, ok := m.welcomeKey(k); ok {
 		return m, cmd
 	}
 
@@ -734,6 +702,11 @@ func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.running {
 			m.appendSystem("still working; wait or press esc twice to cancel")
 			m.refresh()
+			return m, nil
+		}
+		if m.sess.Agent == nil && (!strings.HasPrefix(text, "!") || len(text) <= 1) {
+			// Connecting must not consume the draft or its attachments.
+			m.openModels(m.o.StartupNote)
 			return m, nil
 		}
 		m.input.Reset()
@@ -838,16 +811,6 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 			return m, m.editSessionTitle(m.conv.ID, m.conv.Title)
 		}
 		return m, m.renameSession(m.conv.ID, strings.TrimSpace(strings.TrimPrefix(text, "/rename")))
-	case "/mode":
-		if len(fields) < 2 {
-			m.setMode(m.mode().Next())
-		} else if md, err := agent.ParseMode(fields[1]); err != nil {
-			m.appendSystem(err.Error())
-		} else {
-			m.setMode(md)
-		}
-		m.flash("mode: " + string(m.mode()) + " — " + modeHelp(m.mode()))
-		m.refresh()
 	case "/compact":
 		return m, m.compact()
 	case "/timing":
@@ -954,9 +917,6 @@ func (m *model) prepareAgent() error {
 	}
 	ag := m.sess.Agent
 	ag.System = m.baseSystem
-	if m.mode() == agent.ModePlan {
-		ag.System += prompt.PlanNote(ag.Tools)
-	}
 	if m.o.Prepare != nil {
 		return m.o.Prepare(ag, m.conv.ID)
 	}
@@ -1001,13 +961,13 @@ func (m *model) startRun(fn func(context.Context, *agent.Agent, func(agent.Event
 		co := newCoalescer(send)
 		ag.Retry = func(ctx context.Context, err error, partial bool) bool {
 			co.flush()
-			reply := make(chan agent.Answer, 1)
-			send(approvalMsg{call: agent.ToolCall{Reason: "Completed tools are preserved. " + err.Error()}, reply: reply, retry: true, partial: partial, err: err})
+			reply := make(chan bool, 1)
+			send(approvalMsg{reply: reply, retry: true, partial: partial, err: err})
 			select {
 			case <-ctx.Done():
 				return false
 			case answer := <-reply:
-				return answer == agent.AllowOnce
+				return answer
 			}
 		}
 		defer func() { ag.Retry = nil }()
@@ -1074,15 +1034,9 @@ func (m *model) applyEvent(e agent.Event) {
 		m.blocks = append(m.blocks, &block{kind: blockTool, id: e.ID, name: e.Name, status: "running", args: toolArgs(e.Input)})
 	case agent.ToolDecision:
 		if b := m.tool(e.ID); b != nil {
-			switch {
-			case !e.Allowed:
+			if !e.Allowed {
 				b.status = "denied"
 				b.summary = sanitize.Terminal(e.Reason)
-			case strings.HasPrefix(e.Reason, "approved by user"):
-				b.note = "by you"
-				if strings.HasSuffix(e.Reason, "for this session") {
-					b.note = "by you · session"
-				}
 			}
 		}
 	case agent.ToolResult:
@@ -1145,20 +1099,13 @@ func (m *model) tool(id string) *block {
 	return nil
 }
 
-// renderWelcome (re)draws workspace info and recent sessions with the current theme.
+// renderWelcome refreshes workspace info and the cached recent-session list.
+// Greeting selection belongs to newModel/newConv, not redraws or theme changes.
 func (m *model) renderWelcome() {
 	m.historyCache.turn = nil
-	o := m.o
-	r := dimStyle.Render(fmt.Sprintf("  %s · %s", o.Version, o.Cwd))
-	if o.Session.Agent == nil {
-		r += "\n" + dimStyle.Render("  No model connected yet. /connections lists what is set up and lets you add, disable or remove LLM servers and API keys.")
-	} else {
-		r += "\n" + dimStyle.Render("  "+o.Session.Name+" · /help for commands · /mode switches plan/build/auto")
-	}
-	for _, line := range m.recentLines() {
-		r += "\n" + line
-	}
-	m.welcome.rendered = r
+	m.start.recent, _ = session.List(m.o.Cwd)
+	m.start.recent = m.start.recent[:min(recentSessions, len(m.start.recent))]
+	m.welcome.rendered = dimStyle.Render("arkex · " + welcomeText(m.o.Cwd))
 	m.welcome.lines = nil // drop the cached lines even if the length is unchanged
 }
 
@@ -1194,10 +1141,10 @@ func (m *model) replaceTranscript(blocks []*block) {
 // height so the status bar can say how much is scrolled out of view.
 func (m *model) resizeInput() {
 	if m.width > 0 {
-		m.input.SetWidth(m.width - 4)
+		m.input.SetWidth(m.composerWidth())
 	}
 	m.inputRows = inputRows(m.input.Value(), m.input.Width())
-	if m.vp.Width() == m.width && m.vp.Height() == max(0, m.height-m.boxRows()-footerRows) {
+	if !m.onWelcome() && m.welcomeLayout == m.onWelcome() && m.vp.Width() == m.width && m.vp.Height() == max(0, m.height-m.boxRows()-footerRows) {
 		return // editing within the same input height cannot change the transcript
 	}
 	m.layout()
@@ -1217,13 +1164,30 @@ func (m *model) layout() {
 	if m.width == 0 {
 		return
 	}
+	m.welcomeLayout = m.onWelcome()
+	m.input.Placeholder = "Ask anything…"
 	m.input.MaxHeight = max(1, min(inputMaxRows, m.height-footerRows-3))
 	if len(m.attachments) > 0 {
 		m.input.MaxHeight = max(1, m.input.MaxHeight-1)
 	}
-	m.input.SetWidth(max(1, m.width-4)) // borders plus one-cell margins
+	if m.welcomeLayout {
+		m.input.Placeholder = welcomePlaceholder
+		room := m.height - 2 // bottom rule and model selector
+		if len(m.attachments) > 0 {
+			room--
+		}
+		m.input.MaxHeight = max(1, min(inputMaxRows, room))
+	}
+	m.input.SetWidth(m.composerWidth())
+	m.inputRows = inputRows(m.input.Value(), m.input.Width())
 	m.input.SetHeight(min(m.inputRows, m.input.MaxHeight))
 	vpH := m.height - m.boxRows() - footerRows
+	if m.welcomeLayout && m.panel == nil {
+		vpH = m.height // welcome overlays may use the entire frame
+		if m.start.focus >= m.welcomeGeometry().count+2 {
+			m.focusWelcome(0)
+		}
+	}
 	vpH = max(0, vpH)
 	m.vp.SetWidth(m.width)
 	m.vp.SetHeight(vpH)
@@ -1232,6 +1196,10 @@ func (m *model) layout() {
 
 func (m *model) refresh() {
 	if m.width == 0 {
+		return
+	}
+	if m.welcomeLayout != m.onWelcome() || m.input.Width() != m.composerWidth() {
+		m.layout()
 		return
 	}
 	m.advanceRoll()
@@ -1653,16 +1621,6 @@ func wrapStreaming(b *block, inner int, style *lipgloss.Style, restart bool) []s
 	return lines
 }
 
-func modeHelp(md agent.Mode) string {
-	switch md {
-	case agent.ModePlan:
-		return "read-only tools; the model writes a plan"
-	case agent.ModeAuto:
-		return "trusted scope runs quietly; config denies apply"
-	}
-	return "edits and commands ask for approval per config"
-}
-
 func (m *model) mouseMode() tea.MouseMode {
 	if m.mouse {
 		// All-motion reporting drives hover; the terminal only sends a
@@ -1670,21 +1628,6 @@ func (m *model) mouseMode() tea.MouseMode {
 		return tea.MouseModeAllMotion
 	}
 	return tea.MouseModeNone
-}
-
-// modeBadge is the mode pill; hovered it gains the ▾ hint of a picker.
-func (m *model) modeBadge(hover bool) string {
-	st, label := modeBuildStyle, "BUILD"
-	switch m.mode() {
-	case agent.ModePlan:
-		st, label = modePlanStyle, "PLAN"
-	case agent.ModeAuto:
-		st, label = modeAutoStyle, "AUTO"
-	}
-	if hover {
-		st = pillHoverStyle.Bold(true)
-	}
-	return st.Render(label + " ▾")
 }
 
 // inputView renders the bordered input box, reusing the previous render
@@ -1752,6 +1695,9 @@ func (m *model) View() (v tea.View) {
 	defer func() { v.WindowTitle = m.windowTitle() }()
 	if !m.ready {
 		return tea.NewView("")
+	}
+	if m.onWelcome() && m.panel == nil {
+		return m.welcomeView()
 	}
 	footer := m.footer()
 
@@ -1834,7 +1780,7 @@ func (m *model) View() (v tea.View) {
 }
 
 // answerPending resolves the approval prompt and gives the input box back.
-func (m *model) answerPending(ans agent.Answer) {
+func (m *model) answerPending(ans bool) {
 	if m.pending == nil {
 		return
 	}

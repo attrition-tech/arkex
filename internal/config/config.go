@@ -162,7 +162,6 @@ type Profile struct {
 type Permission string
 
 const (
-	PermissionAsk   Permission = "ask"
 	PermissionAllow Permission = "allow"
 	PermissionDeny  Permission = "deny"
 )
@@ -251,7 +250,7 @@ func readInto(path string, cfg *Config) error {
 // so untrusted: it may pick a default model, profiles and UI settings, and
 // may tighten permissions, but it may not define connections (they carry
 // credentials, run "!commands", and choose where tokens are sent) or loosen
-// a permission the global config asks or denies.
+// a permission the global config denies.
 func readProjectInto(path string, cfg *Config) error {
 	part, err := readPart(path)
 	if err != nil || part == nil {
@@ -285,18 +284,9 @@ func readPart(path string) (*Config, error) {
 	return &part, nil
 }
 
-// stricter reports whether p asks more of the user than other does.
+// stricter reports whether p is more restrictive than other.
 func (p Permission) stricter(other Permission) bool {
-	rank := func(x Permission) int {
-		switch x {
-		case PermissionDeny:
-			return 2
-		case PermissionAsk:
-			return 1
-		}
-		return 0
-	}
-	return rank(p) > rank(other)
+	return p == PermissionDeny && other == PermissionAllow
 }
 
 func (c *Config) merge(o *Config) {
@@ -389,14 +379,14 @@ func (c *Config) ConnectionIDs() []string {
 	return ids
 }
 
-// Permission returns the configured permission for a tool, defaulting to
-// ask for mutating tools and allow for read-only ones.
+// Permission returns the configured permission for a tool. All registered
+// built-ins default to allow; unknown tools fail closed.
 func (c *Config) Permission(tool string) Permission {
 	if p, ok := c.Permissions[tool]; ok {
 		return p
 	}
-	if tools.IsReadOnly(tool) {
+	if tools.IsBuiltin(tool) {
 		return PermissionAllow
 	}
-	return PermissionAsk
+	return PermissionDeny
 }

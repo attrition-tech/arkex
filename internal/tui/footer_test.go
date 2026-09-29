@@ -56,6 +56,7 @@ func footerModel(t *testing.T) *model {
 	m.sess.Agent.SetContextWindow(1000)
 	m.lastInput = 450
 	m.usageIn, m.usageOut = 42, 7
+	m.appendSystem("Conversation toolbar fixture")
 	m.layout()
 	return m
 }
@@ -77,7 +78,10 @@ func TestToolbarHitsMatchRenderedPills(t *testing.T) {
 	m := footerModel(t)
 	line := ansi.Strip(strings.SplitN(m.footer(), "\n", 2)[0])
 	cells := []rune(line)
-	want := map[footerAction]string{actMode: "BUILD ▾", actModel: "local/deepseek-v4-flash ▾", actEffort: "Reasoning: Default ▾", actSession: "new session ▾", actContext: "ctx ▰▰▰▰▱▱▱▱ 45%"}
+	want := map[footerAction]string{actModel: "local/deepseek-v4-flash ▾", actEffort: "Reasoning: Default ▾", actSession: "new session ▾", actContext: "ctx ▰▰▰▰▱▱▱▱ 45% · 42↑ 7↓"}
+	if strings.Contains(line, "BUILD ▾") {
+		t.Fatalf("mode control still rendered: %q", line)
+	}
 	for _, h := range m.footerHits {
 		got := strings.TrimSpace(string(cells[h.x0:h.x1]))
 		if got != want[h.act] {
@@ -114,7 +118,7 @@ func TestToolbarEffortIsNotDuplicated(t *testing.T) {
 func TestToolbarClicksOpenTheRightPicker(t *testing.T) {
 	m := footerModel(t)
 	y := m.toolbarY()
-	for act, title := range map[footerAction]string{actMode: "Mode", actModel: "Switch model", actEffort: "Reasoning effort", actSession: "Session"} {
+	for act, title := range map[footerAction]string{actModel: "Switch model", actEffort: "Reasoning effort", actSession: "Session"} {
 		click(m, hitCenter(t, m, act), y)
 		if m.pal == nil || m.pal.levels[len(m.pal.levels)-1].title != title {
 			t.Fatalf("clicking pill %d: palette = %+v", act, m.pal)
@@ -169,8 +173,8 @@ func TestToolbarDropsDetailWhenNarrow(t *testing.T) {
 	}
 	m.width = 44
 	f = ansi.Strip(m.footer())
-	if strings.Contains(f, "42↑") || !strings.Contains(f, "deepseek-v4-flash ▾") {
-		t.Fatalf("44 cols drops usage, keeps the model: %q", f)
+	if !strings.Contains(f, "deepseek-v4-flash ▾") || !strings.Contains(f, "45%") {
+		t.Fatalf("44 cols keeps the model and gauge: %q", f)
 	}
 	for _, l := range strings.Split(m.footer(), "\n") {
 		if w := ansi.StringWidth(l); w > m.width {

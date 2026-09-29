@@ -142,7 +142,7 @@ func (m *model) forkPrompt(index int) (*session.Session, error) {
 	next, err := m.conv.Fork(index)
 	if err == nil {
 		// Never abandon the original branch if it could not be saved.
-		m.conv.Update(m.sess.Agent.Messages(), m.sess.Name, string(m.mode()), m.usageIn, m.usageOut)
+		m.conv.Update(m.sess.Agent.Messages(), session.Usage{Model: m.sess.Name, Input: m.usageIn, Output: m.usageOut})
 		err = m.conv.Save()
 	}
 	if err != nil {
@@ -188,7 +188,7 @@ func (m *model) removePrompt(index int) tea.Cmd {
 		return m.sessionError(err)
 	}
 	next.Title = m.conv.Title + " (trimmed)"
-	next.Update(next.Messages, m.sess.Name, string(m.mode()), 0, 0)
+	next.Update(next.Messages, session.Usage{Model: m.sess.Name})
 	if m.sess.Agent.Model != nil {
 		level := m.sess.Agent.Model.Ref.Thinking
 		next.Effort = &level

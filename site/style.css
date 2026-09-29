@@ -30,15 +30,13 @@ code { font-family: inherit; }
 .platforms { border-top: 1px solid var(--line); padding: 32px 0 48px; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 h2 { font-size: 17px; font-weight: 500; letter-spacing: -.4px; }
-.platform-grid { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 28px; }
+.platform-grid { display: grid; grid-template-columns: repeat(2, 1fr); margin-top: 28px; }
 .platform-grid article { padding: 10px 28px; border-left: 1px solid var(--line); }
 .platform-grid article:first-child { padding-left: 0; border: 0; }
 .platform-symbol { color: var(--accent); font-size: 29px; }
 h3 { font-size: 18px; font-weight: 500; margin: 8px 0 2px; }
 .platform-grid p { color: var(--muted); font-size: 12px; margin: 0 0 16px; }
 .tag { display: inline-block; color: var(--accent); font-size: 11px; border: 1px solid var(--line); padding: 4px 9px; border-radius: 4px; }
-a.tag:hover { background: var(--panel); border-color: var(--accent); }
-.platform-grid .fine { font-size: 10px; margin: 10px 0 0; }
 .details { display: grid; grid-template-columns: repeat(3, 1fr); gap: 32px; border-top: 1px solid var(--line); padding: 38px 0; }
 .details p { color: var(--muted); font-size: 12px; }
 .details code, .getting-started code { color: var(--accent); }

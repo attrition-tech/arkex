@@ -1,4 +1,4 @@
-// Command arkex is a lightweight terminal coding agent.
+// Command arkex is a lightweight terminal AI agent.
 package main
 
 import (
@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -38,9 +39,7 @@ type rootFlags struct {
 	model   string
 	print   string
 	json    bool
-	yolo    bool
 	noTools bool
-	mode    string
 	resume  string
 }
 
@@ -77,8 +76,8 @@ func newRoot() *cobra.Command {
 	var f rootFlags
 	root := &cobra.Command{
 		Use:   "arkex [prompt]",
-		Short: "A lightweight terminal coding agent that talks to your own models",
-		Long: `arkex runs a coding agent in your terminal against any OpenAI-compatible
+		Short: "A lightweight terminal AI agent that talks to your own models",
+		Long: `arkex runs an AI agent in your terminal against any OpenAI-compatible
 endpoint you configure. Without arguments it opens the interactive TUI.
 
 Config lives in ~/.arkex/config.json (or $ARKEX_HOME/config.json) and may be
@@ -98,8 +97,6 @@ create a starter file.`,
 	pf.StringVarP(&f.model, "model", "m", "", `model or profile: "name", "connection/model" or "connection/model:thinking"`)
 	root.Flags().StringVarP(&f.print, "print", "p", "", "run one prompt non-interactively and print the reply (use - to read stdin)")
 	root.Flags().BoolVar(&f.json, "json", false, "with --print, emit newline-delimited JSON events instead of text")
-	root.Flags().StringVar(&f.mode, "mode", "build", "starting mode: plan (read-only), build (ask per config) or auto (skip asks within trusted scope; obey denies)")
-	root.Flags().BoolVar(&f.yolo, "yolo", false, "alias for --mode auto")
 	root.Flags().BoolVar(&f.noTools, "no-tools", false, "disable all tools (pure chat)")
 	root.Flags().StringVarP(&f.resume, "resume", "r", "", "resume a saved session from this directory by id (see /resume in the TUI)")
 	root.Flags().BoolP("continue", "c", false, "resume the most recent session from this directory")
@@ -113,25 +110,14 @@ func runRoot(ctx context.Context, f rootFlags, args []string) error {
 	if err != nil {
 		return err
 	}
+	cwd, err = filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return err
+	}
 	configPath, err := config.GlobalPath()
 	if err != nil {
 		return err
 	}
-	asker := tui.NewAsker()
-
-	startMode, err := agent.ParseMode(f.mode)
-	if err != nil {
-		return err
-	}
-	if f.yolo {
-		startMode = agent.ModeAuto
-	}
-	// One mode policy is shared by every agent this process builds, so a
-	// mode switch in the TUI survives /model.
-	modePolicy := agent.NewModePolicy(startMode, nil)
-	grants := &agent.Grants{} // "allow this session" answers, kept across model switches
-	home, _ := os.UserHomeDir()
-	scope := agent.NewScope(cwd, home)
 	var temps scratch.Store
 	cleanup := true
 	defer func() {
@@ -146,17 +132,28 @@ func runRoot(ctx context.Context, f rootFlags, args []string) error {
 		if err != nil {
 			return fmt.Errorf("creating scratch directory: %w", err)
 		}
-		scope.SetScratch(dir)
 		ag.System += prompt.ScratchNote(dir)
-		if tool, ok := ag.Tools.Get("bash"); ok {
-			tool.(*tools.Bash).TempDir = dir
+		for _, tool := range ag.Tools.All() {
+			switch tool := tool.(type) {
+			case *tools.Bash:
+				tool.TempDir = dir
+			case *tools.Write:
+				tool.TempDir = dir
+			case *tools.Edit:
+				tool.TempDir = dir
+			case *tools.Packages:
+				tool.TempDir = dir
+			}
+		}
+		if !f.noTools {
+			return tools.CheckSandbox(ctx, cwd, dir)
 		}
 		return nil
 	}
 
 	// connect resolves a selector against a fresh config read and builds a
 	// ready agent. The TUI calls it again when the user switches models.
-	connect := func(ctx context.Context, selector string, interactive bool) (*agent.Agent, config.ModelRef, error) {
+	connect := func(ctx context.Context, selector string) (*agent.Agent, config.ModelRef, error) {
 		cfg, err := config.Load(cwd)
 		if err != nil {
 			return nil, config.ModelRef{}, err
@@ -172,24 +169,23 @@ func runRoot(ctx context.Context, f rootFlags, args []string) error {
 		if err != nil {
 			return nil, config.ModelRef{}, err
 		}
+		system, err := prompt.Build(prompt.Options{Cwd: cwd, Now: time.Now(), Model: ref.String(), ReadFile: func(path string) ([]byte, error) {
+			if cfg.Permission("read") != config.PermissionAllow {
+				return nil, errors.New("read denied by config")
+			}
+			return os.ReadFile(path)
+		}})
+		if err != nil {
+			return nil, config.ModelRef{}, err
+		}
 		ag := &agent.Agent{
-			Model:  model,
-			System: prompt.Build(prompt.Options{Cwd: cwd, Now: time.Now(), Model: ref.String()}),
+			Model: model, System: system, Policy: agent.ConfigPolicy{Config: cfg},
 		}
 		if !f.noTools {
 			ag.Tools = tools.Default(cwd)
 		} else {
 			ag.Tools = tools.NewRegistry()
 		}
-		if interactive {
-			modePolicy.SetBase(agent.ConfigPolicy{Config: cfg, Asker: asker, Grants: grants})
-			modePolicy.SetScope(scope, asker)
-		} else {
-			// "ask" tools and anything leaving the workspace are denied in print mode.
-			modePolicy.SetBase(agent.ConfigPolicy{Config: cfg})
-			modePolicy.SetScope(scope, nil)
-		}
-		ag.Policy = modePolicy
 		return ag, ref, nil
 	}
 
@@ -223,15 +219,12 @@ func runRoot(ctx context.Context, f rootFlags, args []string) error {
 				}
 			}
 		}
-		ag, ref, err := connect(ctx, selector, false)
+		ag, ref, err := connect(ctx, selector)
 		if err != nil {
 			if errors.Is(err, errNoConnections) {
 				return fmt.Errorf("%w; run `arkex` and press a in the Connections panel, or `arkex config init`", err)
 			}
 			return err
-		}
-		if modePolicy.Mode() == agent.ModePlan {
-			ag.System += prompt.PlanNote(ag.Tools)
 		}
 		// --continue/--resume in print mode: load the saved conversation,
 		// answer, and save it back. Plain one-shot runs are not persisted.
@@ -265,7 +258,7 @@ func runRoot(ctx context.Context, f rootFlags, args []string) error {
 		}
 		if conv != nil {
 			usage := ag.LastUsage()
-			conv.Update(ag.Messages(), displayName(ref), string(modePolicy.Mode()), conv.UsageIn+usage.InputTokens, conv.UsageOut+usage.OutputTokens)
+			conv.Update(ag.Messages(), session.Usage{Model: displayName(ref), Input: conv.UsageIn + usage.InputTokens, Output: conv.UsageOut + usage.OutputTokens})
 			conv.LastInput = ag.LastInput()
 			level := ag.Model.Ref.Thinking
 			conv.Effort = &level
@@ -286,12 +279,10 @@ func runRoot(ctx context.Context, f rootFlags, args []string) error {
 		Resume:      f.resume,
 		ResumeModel: f.model,
 		UI:          uiPrefs(cwd),
-		Asker:       asker,
-		Mode:        modePolicy,
 		ConfigPath:  configPath,
 		UserAgent:   provider.UserAgent,
 		Connect: func(ctx context.Context, selector string) (tui.Connection, error) {
-			ag, ref, err := connect(ctx, selector, true)
+			ag, ref, err := connect(ctx, selector)
 			if err != nil {
 				return tui.Connection{}, err
 			}
@@ -307,7 +298,7 @@ func runRoot(ctx context.Context, f rootFlags, args []string) error {
 		cleanup = !errors.Is(err, tui.ErrRunStillActive)
 		return err
 	}
-	if ag, ref, err := connect(ctx, f.model, true); err == nil {
+	if ag, ref, err := connect(ctx, f.model); err == nil {
 		opts.Session = tui.Connection{Agent: ag, Name: displayName(ref)}
 	} else if f.model != "" {
 		return err // an explicit --model that does not work is a hard error
@@ -472,7 +463,7 @@ func newModelsCmd(f *rootFlags) *cobra.Command {
 // ---- config ----
 
 const starterConfig = `{
-  "version": 2,
+  "version": 4,
   "connections": {
     "local": {
       "kind": "llm-server",
@@ -491,9 +482,10 @@ const starterConfig = `{
   "default": "default",
   "permissions": {
     "read": "allow",
-    "bash": "ask",
-    "write": "ask",
-    "edit": "ask"
+    "bash": "allow",
+    "write": "allow",
+    "edit": "allow",
+    "packages": "allow"
   }
 }
 `

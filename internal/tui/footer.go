@@ -8,8 +8,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
-
-	"github.com/attrition-tech/arkex/internal/agent"
 )
 
 // The footer is everything under the transcript:
@@ -29,7 +27,6 @@ type footerAction int
 
 const (
 	actNone footerAction = iota
-	actMode
 	actModel
 	actEffort
 	actSession
@@ -54,7 +51,6 @@ type footerKey struct {
 	assumed            bool
 	compacting         bool
 	compactFrame       int
-	mode               agent.Mode
 	inputRows          int    // when the input text is taller than its box
 	inputEmpty         bool   // hints show only while nothing is typed
 	panel              string // panel legend replaces the hints while a panel is open
@@ -99,7 +95,7 @@ func (m *model) footer() string {
 		effort:  m.effortLabel(),
 		elapsed: int64(elapsed / time.Second),
 		usageIn: m.usageIn, usageOut: m.usageOut, lastInput: m.lastInput,
-		ctx: m.contextWindow(), width: m.width, gen: themeGen, mode: m.mode(),
+		ctx: m.contextWindow(), width: m.width, gen: themeGen,
 		assumed:    m.sess.Agent != nil && m.sess.Agent.ContextWindowAssumed(),
 		compacting: m.compacting,
 		inputEmpty: m.input.Value() == "" && len(m.attachments) == 0,
@@ -156,7 +152,6 @@ func (m *model) toolbar(key footerKey) string {
 		x += w
 	}
 
-	pill(actMode, m.modeBadge(key.hover == actMode))
 	model := key.name
 	if i := strings.IndexByte(model, '/'); i >= 0 && (lipgloss.Width(model) > 28 || m.width < 80) {
 		model = model[i+1:] // the connection is in the Connections panel; the model matters here
@@ -289,8 +284,6 @@ func (m *model) footerClick(x, y int) (tea.Cmd, bool) {
 		return nil, false
 	}
 	switch m.footerHitAt(x) {
-	case actMode:
-		return m.openPaletteSub("Mode", modeItems(m)), true
 	case actModel:
 		if m.sess.Agent == nil {
 			m.openModels("")
@@ -318,19 +311,6 @@ func (m *model) footerHitAt(x int) footerAction {
 		}
 	}
 	return actNone
-}
-
-// modeItems lists the three modes, the current one marked.
-func modeItems(m *model) []paletteItem {
-	var items []paletteItem
-	for _, md := range agent.Modes {
-		hint := "/mode " + string(md)
-		if md == m.mode() {
-			hint = "current"
-		}
-		items = append(items, paletteItem{title: modeTitle(md), hint: hint, cmd: "/mode " + string(md)})
-	}
-	return items
 }
 
 func pillStyleFor(hover bool) lipgloss.Style {

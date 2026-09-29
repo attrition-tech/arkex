@@ -33,8 +33,7 @@ type Session struct {
 	Title        string             `json:"title"`
 	Model        string             `json:"model,omitempty"`
 	Effort       *string            `json:"effort,omitempty"` // nil = legacy; empty string = provider default
-	Mode         string             `json:"mode,omitempty"`
-	State        string             `json:"state,omitempty"` // empty = active; archived or trash
+	State        string             `json:"state,omitempty"`  // empty = active; archived or trash
 	Created      time.Time          `json:"created"`
 	Updated      time.Time          `json:"updated"`
 	UsageIn      int64              `json:"usage_in,omitempty"`
@@ -83,12 +82,19 @@ func New(cwd string) *Session {
 	}
 }
 
+// Usage is the model and cumulative token usage saved with a conversation.
+type Usage struct {
+	Model  string
+	Input  int64
+	Output int64
+}
+
 // Update records the conversation state and refreshes the title and time.
-func (s *Session) Update(msgs []fantasy.Message, model, mode string, in, out int64) {
+func (s *Session) Update(msgs []fantasy.Message, usage Usage) {
 	s.syncContext(msgs)
 	s.Messages = msgs
-	s.Model, s.Mode = model, mode
-	s.UsageIn, s.UsageOut = in, out
+	s.Model = usage.Model
+	s.UsageIn, s.UsageOut = usage.Input, usage.Output
 	s.Updated = time.Now()
 	if s.Title == "" {
 		s.Title = TitleFor(msgs)

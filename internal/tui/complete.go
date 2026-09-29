@@ -28,7 +28,6 @@ var commands = []command{
 	{name: "/connections", desc: "list, add, disable or remove LLM servers, API keys and models"},
 	{name: "/models", desc: "same as /connections"},
 	{name: "/model", args: "<provider/model>", desc: "switch model (the conversation continues)"},
-	{name: "/mode", args: "[plan|build|auto]", desc: "switch mode"},
 	{name: "/clear", desc: "start a fresh conversation (also /new)"},
 	{name: "/resume", args: "[id]", desc: "resume a saved session from this directory (also /sessions)"},
 	{name: "/rename", args: "[title]", desc: "rename the current saved session"},
@@ -49,8 +48,8 @@ func helpText() string {
 		}
 		fmt.Fprintf(&sb, "%-26s %s\n", head, c.desc)
 	}
-	sb.WriteString("\nmodes: plan = read-only tools, the model writes a plan · build = edits and commands ask per config · auto = trusted scope runs quietly. Explicit config denies apply in every mode.\n")
-	sb.WriteString("keys: enter send · shift+enter newline · tab highlights older sent messages from empty input, shift+tab newer then composer · enter or e edits the highlighted prompt; click a sent prompt for Edit and resend · esc cancels editing; resend creates a new branch without undoing file changes · up/down input history · / or ctrl+p command palette · @file attach a file (png/jpg/gif/webp become image chips; backspace on an empty input removes the last) · !cmd run a shell command · /mode switch mode · ctrl+l clear screen · esc or ctrl+c twice within 2s stops a run; ctrl+c twice exits when idle (selected text copies instead) · pgup/pgdown, ctrl+up/down, ctrl+home/end scroll · wheel scrolls · click toggles a card (one detail open at a time)")
+	sb.WriteString("welcome: tab/shift+tab selects the input, model, or recent sessions; enter activates the selection\n")
+	sb.WriteString("keys: enter send · shift+enter newline · tab highlights older sent messages from empty input, shift+tab newer then composer · enter or e edits the highlighted prompt; click a sent prompt for Edit and resend · esc cancels editing; resend creates a new branch without undoing file changes · up/down input history · / or ctrl+p command palette · @file attach a file (png/jpg/gif/webp become image chips; backspace on an empty input removes the last) · !cmd run a shell command · ctrl+l clear screen · esc or ctrl+c twice within 2s stops a run; ctrl+c twice exits when idle (selected text copies instead) · pgup/pgdown, ctrl+up/down, ctrl+home/end scroll · wheel scrolls · click toggles a card (one detail open at a time)")
 	return sb.String()
 }
 
@@ -391,11 +390,15 @@ func (m *model) renderPopup(width int) string {
 		return ""
 	}
 	// Keep the selection in view.
-	top := 0
-	if c.sel >= maxCompRows {
-		top = c.sel - maxCompRows + 1
+	limit := maxCompRows
+	if m.onWelcome() {
+		limit = min(limit, max(1, m.height-3)) // borders and the remaining-count row
 	}
-	rows := c.items[top:min(len(c.items), top+maxCompRows)]
+	top := 0
+	if c.sel >= limit {
+		top = c.sel - limit + 1
+	}
+	rows := c.items[top:min(len(c.items), top+limit)]
 	nameW := 0
 	for _, it := range rows {
 		nameW = max(nameW, lipgloss.Width(it.value))

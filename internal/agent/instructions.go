@@ -38,23 +38,35 @@ func (a *Agent) toolInstructions(ctx context.Context, tool tools.Tool, input jso
 	if err := json.Unmarshal(input, &in); err != nil {
 		return "", nil // The tool supplies the normal argument error.
 	}
-	home, _ := os.UserHomeDir()
-	scope := NewScope(root, home)
+	resolve := func(path string) string {
+		if path == "~" || strings.HasPrefix(path, "~/") {
+			home, _ := os.UserHomeDir()
+			path = home + path[1:]
+		}
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(root, path)
+		}
+		return instructionPath(filepath.Clean(path))
+	}
 	var dir string
 	if tool.Name() == "bash" {
-		dir = scope.bashWorkdir(in.Workdir)
+		dir = resolve(in.Workdir)
 	} else {
 		if in.Path == "" {
 			return "", nil
 		}
-		path := canonical(scope.resolve(in.Path))
+		path := resolve(in.Path)
 		dir = filepath.Dir(path)
 		if st, err := os.Stat(path); err == nil && st.IsDir() {
 			dir = path
 		}
 	}
 	var out strings.Builder
-	for _, path := range prompt.AgentsFiles(dir) {
+	files, err := prompt.AgentsFiles(dir)
+	if err != nil {
+		return "", err
+	}
+	for _, path := range files {
 		args, _ := json.Marshal(map[string]string{"path": path})
 		decision, err := a.Policy.Decide(ctx, ToolCall{Name: "read", Input: string(args)})
 		if err != nil {
@@ -77,6 +89,19 @@ func (a *Agent) toolInstructions(ctx context.Context, tool tools.Tool, input jso
 		return "", nil
 	}
 	return "Action not executed: newly discovered AGENTS.md instructions follow. Read them and issue a revised or repeated tool call if appropriate.\n" + out.String(), nil
+}
+
+// Resolve the existing ancestor of a not-yet-created destination. This is
+// instruction discovery only; tools enforce writes separately with os.Root.
+func instructionPath(path string) string {
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		return real
+	}
+	parent := filepath.Dir(path)
+	if parent == path {
+		return path
+	}
+	return filepath.Join(instructionPath(parent), filepath.Base(path))
 }
 
 func (a *Agent) hasInstructions(block string) bool {

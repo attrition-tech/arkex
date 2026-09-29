@@ -36,6 +36,15 @@ func instructionFixture(t *testing.T) string {
 	return root
 }
 
+func testPrompt(t *testing.T, root string) string {
+	t.Helper()
+	system, err := prompt.Build(prompt.Options{Cwd: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return system
+}
+
 func TestInstructionsBeforeWriteAndInNextRequest(t *testing.T) {
 	root := instructionFixture(t)
 	target := filepath.Join(root, "sub", "deep", "new.txt")
@@ -54,7 +63,7 @@ func TestInstructionsBeforeWriteAndInNextRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a := &Agent{Model: model, Tools: tools.Default(root), Policy: AllowAll{}, System: prompt.Build(prompt.Options{Cwd: root})}
+	a := &Agent{Model: model, Tools: tools.Default(root), Policy: AllowAll{}, System: testPrompt(t, root)}
 	if err := a.Run(t.Context(), "write it", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +85,7 @@ func TestInstructionsBeforeWriteAndInNextRequest(t *testing.T) {
 
 func TestInstructionsScopeRefreshAndPermissions(t *testing.T) {
 	root := instructionFixture(t)
-	a := &Agent{Tools: tools.Default(root), Policy: AllowAll{}, System: prompt.Build(prompt.Options{Cwd: root})}
+	a := &Agent{Tools: tools.Default(root), Policy: AllowAll{}, System: testPrompt(t, root)}
 	call := ToolCall{ID: "c", Name: "bash", Input: `{"workdir":"sub/deep","command":"echo should-not-run"}`}
 	res, bad, err := a.runOne(t.Context(), call, func(Event) {})
 	if err != nil || bad || !strings.Contains(res.Output, "Action not executed") {
@@ -118,7 +127,7 @@ func TestInstructionsReadAndEditTargets(t *testing.T) {
 	root := instructionFixture(t)
 	for _, name := range []string{"read", "edit"} {
 		t.Run(name, func(t *testing.T) {
-			a := &Agent{Tools: tools.Default(root), Policy: AllowAll{}, System: prompt.Build(prompt.Options{Cwd: root})}
+			a := &Agent{Tools: tools.Default(root), Policy: AllowAll{}, System: testPrompt(t, root)}
 			res, bad, err := a.runOne(t.Context(), ToolCall{Name: name, Input: `{"path":"sub/deep/new.txt"}`}, func(Event) {})
 			if err != nil || bad || !strings.Contains(res.Output, "deep rule") {
 				t.Fatalf("instructions missing: %+v %v %v", res, bad, err)

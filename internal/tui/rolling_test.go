@@ -120,7 +120,7 @@ func TestRetryDialogAndPartialReset(t *testing.T) {
 		m.blocks = []*block{newBlock(blockUser, "hi"), groupTool("edit", "saved.go")}
 		m.applyEvent(agent.TurnStart{Step: 2})
 		m.applyEvent(agent.TextDelta{Text: "unfinished"})
-		reply := make(chan agent.Answer, 1)
+		reply := make(chan bool, 1)
 		m.Update(approvalMsg{retry: true, partial: true, reply: reply})
 		if !strings.Contains(panelText(m), "retry restarts this response") || !strings.Contains(panelText(m), "Try again") {
 			t.Fatal(panelText(m))
@@ -130,9 +130,9 @@ func TestRetryDialogAndPartialReset(t *testing.T) {
 		} else {
 			typeKeys(m, "enter")
 		}
-		want := agent.AllowOnce
+		want := true
 		if cancel {
-			want = agent.Deny
+			want = false
 		}
 		if got := <-reply; got != want || m.pending != nil {
 			t.Fatal("wrong response", got)
@@ -153,13 +153,13 @@ func TestInvalidResponseDialog(t *testing.T) {
 		{agent.ErrMalformedToolResponse, "Malformed tool response · 2 retries exhausted"},
 	} {
 		m, _ := testModel(t)
-		reply := make(chan agent.Answer, 1)
+		reply := make(chan bool, 1)
 		m.Update(approvalMsg{retry: true, err: tc.err, reply: reply})
 		if got := panelText(m); !strings.Contains(got, tc.title) || strings.Contains(got, "3 retries exhausted") {
 			t.Fatal(got)
 		}
 		typeKeys(m, "esc", "esc")
-		if got := <-reply; got != agent.Deny || m.pending != nil {
+		if got := <-reply; got || m.pending != nil {
 			t.Fatal("cancel failed")
 		}
 	}

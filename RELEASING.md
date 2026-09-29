@@ -10,7 +10,7 @@ The Go module path is `github.com/attrition-tech/arkex`, matching the source rep
 ```
 <base>/install.sh                                  installer (curl | sh)
 <base>/stable.json                                 {"version":"0.1.0","published_at":…}
-<base>/v0.1.0/arkex_0.1.0_<os>_<arch>.tar.gz       (zip on windows)
+<base>/v0.1.0/arkex_0.1.0_<os>_<arch>.tar.gz
 <base>/v0.1.0/SHA256SUMS
 <base>/v0.1.0/SHA256SUMS.sig                       "<keyid> <base64 ed25519 signature>"
 ```
@@ -64,10 +64,10 @@ move to a lower version. Per-version directories are immutable; only
 
 ### Native CI gate
 
-`.github/workflows/ci.yml` builds, vets and tests on Linux, macOS and Windows.
-Linux/macOS run the race detector; Windows runs the normal suite. Each platform
-also builds and executes the real CLI against an isolated local fake provider:
-model listing, streaming print/JSON output, and a file-tool round trip. Logs are
+`.github/workflows/ci.yml` builds, vets and tests with the race detector on Linux
+and macOS. Each platform also builds and executes the real CLI against an
+isolated local fake provider: model listing, streaming print/JSON output, and a
+file-tool round trip. Logs are
 retained as Actions artifacts for 14 days. These tests need no provider secrets.
 The tag-triggered GitHub release workflow waits for this entire CI workflow on
 the tagged revision before publishing.
@@ -82,14 +82,14 @@ release is running. The Amp GitHub App cannot administer Actions secrets; an
 owner must configure them in GitHub settings. No release credentials are in the repo.
 
 ```sh
-go build -o arkex-smoke ./cmd/arkex  # use arkex-smoke.exe on Windows
+go build -o arkex-smoke ./cmd/arkex
 python scripts/smoke.py ./arkex-smoke
 ```
 
 The smoke test uses an ephemeral port and disposable directories (including
 spaces in paths); it neither contacts a real LLM nor modifies a user's config.
 Hosted CI does **not** establish clipboard interoperability, physical frame rate,
-real sleep/wake behavior, or terminal rendering in Terminal.app/Windows Terminal.
+real sleep/wake behavior, or rendering in native macOS/Linux terminals.
 Keep the real-terminal checklist below as the release gate for those behaviors.
 
 For TUI changes, run the native-terminal gate before publishing:
@@ -122,7 +122,8 @@ git push --atomic github main vX.Y.Z
 ```
 
 Actions verifies native CI, then builds/signs/uploads to R2. A separate job
-publishes a GitHub Release with generated notes and the exact same seven assets,
+publishes a GitHub Release with generated notes and the exact same six assets
+(four platform archives, checksums, and signature),
 without access to R2 or signing secrets. GitHub drafts remain drafts until all
 assets are uploaded. Completed releases are never overwritten.
 

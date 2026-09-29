@@ -12,7 +12,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -125,9 +124,6 @@ func TestNetworkTimeoutRecovery(t *testing.T) {
 }
 
 func TestNetworkDisconnectDoesNotRepeatCompletedCommand(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("POSIX command")
-	}
 	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)

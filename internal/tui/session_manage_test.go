@@ -16,7 +16,7 @@ import (
 func savedManagedSession(t *testing.T, m *model) *session.Session {
 	t.Helper()
 	s := session.New(m.o.Cwd)
-	s.Update(sampleMessages(), m.sess.Name, "build", 4200, 700)
+	s.Update(sampleMessages(), session.Usage{Model: m.sess.Name, Input: 4200, Output: 700})
 	s.LastInput = 730
 	if err := s.Save(); err != nil {
 		t.Fatal(err)

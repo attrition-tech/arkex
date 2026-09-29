@@ -20,7 +20,7 @@ const (
 // Bash runs a shell command in Dir.
 type Bash struct {
 	Dir     string
-	TempDir string // conversation-owned scratch, empty preserves inherited environment
+	TempDir string // conversation-owned scratch
 	// Shell overrides the shell binary; defaults to $SHELL or a discovered
 	// POSIX shell.
 	Shell string
@@ -34,7 +34,7 @@ type bashInput struct {
 
 func (*Bash) Name() string { return "bash" }
 func (*Bash) Description() string {
-	return "Run a shell command in the working directory and return its combined output. Long-running or interactive commands are not supported; set timeout_ms for slow commands (max 10 minutes)."
+	return "Run a shell command in a private working copy and return its combined output. Completed commands publish changed files to the workspace and scratch; conflicts or unsupported filesystem entries block publication. On macOS use relative workspace paths and $TMPDIR: original absolute paths are read-only. Long-running or interactive commands are not supported; set timeout_ms for slow commands (max 10 minutes)."
 }
 
 func (*Bash) Schema() map[string]any {
@@ -64,19 +64,26 @@ func (t *Bash) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	cmd := exec.CommandContext(ctx, sh, "-c", in.Command)
-	cmd.Dir = t.Dir
+	dir := t.Dir
 	if in.Workdir != "" {
-		dir, err := resolvePath(t.Dir, in.Workdir)
+		resolved, err := resolvePath(t.Dir, in.Workdir)
 		if err != nil {
 			return Result{}, err
 		}
-		cmd.Dir = dir
+		dir = resolved
 	}
+	run, err := sandboxCommand(ctx, t.Dir, t.TempDir, dir, sh, "-c", in.Command)
+	if err != nil {
+		return Result{}, err
+	}
+	defer run.Close()
+	cmd := run.cmd
 	cmd.Stdin = nil
+	env := cmd.Environ()
 	if t.TempDir != "" {
-		cmd.Env = append(cmd.Environ(), "TMPDIR="+t.TempDir, "TMP="+t.TempDir, "TEMP="+t.TempDir)
+		env = append(env, "TMPDIR="+t.TempDir, "TMP="+t.TempDir, "TEMP="+t.TempDir)
 	}
+	cmd.Env = run.environment(env)
 	buf := limitedOutput{limit: maxBashOutput}
 	cmd.Stdout = &buf
 	cmd.Stderr = &buf
@@ -86,6 +93,15 @@ func (t *Bash) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 	start := time.Now()
 	err = cmd.Run()
 	dur := time.Since(start).Round(time.Millisecond)
+	// Best-effort child cleanup; write safety does not depend on descendants
+	// exiting. Publication copies captured bytes, never execution inodes.
+	if cmd.Process != nil {
+		_ = cmd.Cancel()
+	}
+	var publishErr error
+	if ctx.Err() == nil && cmd.ProcessState != nil {
+		publishErr = run.Publish(ctx)
+	}
 
 	out := buf.String()
 	var sb strings.Builder
@@ -95,9 +111,15 @@ func (t *Bash) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 	}
 	summary := firstLine(in.Command)
 	switch {
+	case publishErr != nil:
+		fmt.Fprintf(&sb, "[command exit: %v; %v]", err, publishErr)
+		return Result{Output: sb.String(), Summary: summary}, publishErr
 	case ctx.Err() == context.DeadlineExceeded:
-		fmt.Fprintf(&sb, "[command timed out after %s]", timeout)
+		fmt.Fprintf(&sb, "[command timed out after %s]\n[unpublished command changes discarded]", timeout)
 		return Result{Output: sb.String(), Summary: summary}, errors.New("timed out")
+	case ctx.Err() != nil:
+		sb.WriteString("[command canceled; unpublished command changes discarded]")
+		return Result{Output: sb.String(), Summary: summary}, ctx.Err()
 	case err != nil:
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {

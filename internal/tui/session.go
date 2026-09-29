@@ -21,7 +21,7 @@ func (m *model) saveConv() {
 	if m.conv == nil || m.sess.Agent == nil {
 		return
 	}
-	m.conv.Update(m.sess.Agent.Messages(), m.sess.Name, string(m.mode()), m.usageIn, m.usageOut)
+	m.conv.Update(m.sess.Agent.Messages(), session.Usage{Model: m.sess.Name, Input: m.usageIn, Output: m.usageOut})
 	m.conv.LastInput = m.lastInput
 	if m.sess.Agent.Model != nil {
 		level := m.sess.Agent.Model.Ref.Thinking
@@ -43,6 +43,8 @@ func (m *model) newConv() {
 	if m.sess.Agent != nil {
 		m.sess.Agent.SetMessages(nil)
 	}
+	m.start = welcomeScreen{greeting: pickWelcomeGreeting(time.Now())}
+	m.renderWelcome()
 }
 
 // carryConv moves the current conversation into a newly connected agent so
@@ -174,9 +176,6 @@ func (m *model) loadConversation(s *session.Session) {
 		m.lastInput = 0
 	}
 	m.sess.Agent.RestoreLastInput(m.lastInput)
-	if md, err := agent.ParseMode(s.Mode); err == nil {
-		m.setMode(md)
-	}
 	m.conv = s
 	m.bindPromptCheckpoints()
 	note := fmt.Sprintf("resumed %q · %d messages · %s", s.Title, len(s.Messages), session.Age(s.Updated, time.Now()))
@@ -254,25 +253,6 @@ func blocksFromMessages(msgs []fantasy.Message) []*block {
 		}
 	}
 	return out
-}
-
-// recentLines lists this directory's latest sessions for the welcome
-// screen.
-func (m *model) recentLines() []string {
-	list, err := session.List(m.o.Cwd)
-	if err != nil || len(list) == 0 {
-		return nil
-	}
-	now := time.Now()
-	lines := []string{"", dimStyle.Render("  recent in this directory (/resume to pick):")}
-	for i, s := range list {
-		if i == recentSessions {
-			lines = append(lines, dimStyle.Render(fmt.Sprintf("  … %d more", len(list)-recentSessions)))
-			break
-		}
-		lines = append(lines, "  "+dimStyle.Render("· ")+s.Title+dimStyle.Render("  "+session.Age(s.Updated, now)+"  /resume "+s.ID))
-	}
-	return lines
 }
 
 func (m *model) hasSessions() bool {

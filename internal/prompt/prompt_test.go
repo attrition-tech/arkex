@@ -1,33 +1,38 @@
 package prompt
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/attrition-tech/arkex/internal/tools"
 )
 
-func TestPlanNoteUsesRegisteredTools(t *testing.T) {
-	for _, tc := range []struct {
-		name             string
-		registry         *tools.Registry
-		allowed, refused string
-	}{
-		{"default", tools.Default(""), "read", "write, edit, bash"},
-		{"subset", tools.NewRegistry(&tools.Bash{}, &tools.Read{}), "read", "bash"},
-		{"mutating only", tools.NewRegistry(&tools.Edit{}), "none", "edit"},
-		{"empty", nil, "none", "none"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got := PlanNote(tc.registry)
-			want := "Read-only tools permitted by this mode: " + tc.allowed + ". Registered tools refused by this mode: " + tc.refused + "."
-			if !strings.Contains(got, want) {
-				t.Fatalf("want %q in %q", want, got)
-			}
-		})
+func build(t *testing.T, o Options) string {
+	t.Helper()
+	s, err := Build(o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func TestBuildReportsInstructionReadErrors(t *testing.T) {
+	dir := t.TempDir()
+	write(t, filepath.Join(dir, "AGENTS.md"), "rules")
+	_, err := Build(Options{Cwd: dir, ReadFile: func(string) ([]byte, error) { return nil, errors.New("read denied") }})
+	if err == nil || !strings.Contains(err.Error(), "read denied") {
+		t.Fatalf("lost policy error: %v", err)
+	}
+	if err := os.Remove(filepath.Join(dir, "AGENTS.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("missing", filepath.Join(dir, "AGENTS.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Build(Options{Cwd: dir}); err == nil {
+		t.Fatal("broken instructions silently ignored")
 	}
 }
 
@@ -54,13 +59,16 @@ func TestAgentsFilesWalksUpToRepoRootOutermostFirst(t *testing.T) {
 	leaf := filepath.Join(repo, "internal", "tui")
 	write(t, filepath.Join(leaf, "AGENTS.md"), "leaf")
 
-	got := AgentsFiles(leaf)
+	got, err := AgentsFiles(leaf)
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := []string{filepath.Join(repo, "AGENTS.md"), filepath.Join(leaf, "AGENTS.md")}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Fatalf("AgentsFiles = %v, want %v", got, want)
 	}
 	// From the repo root itself only the root file applies.
-	if got := AgentsFiles(repo); len(got) != 1 || got[0] != want[0] {
+	if got, err := AgentsFiles(repo); err != nil || len(got) != 1 || got[0] != want[0] {
 		t.Fatalf("at root = %v", got)
 	}
 }
@@ -69,7 +77,11 @@ func TestAgentsFilesWithoutGitStopsAtFilesystemRoot(t *testing.T) {
 	dir := t.TempDir()
 	// No .git anywhere under TempDir; the walk must terminate and return
 	// nothing from a directory tree that has no AGENTS.md files.
-	for _, f := range AgentsFiles(dir) {
+	files, err := AgentsFiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
 		if strings.HasPrefix(f, dir) {
 			t.Fatalf("unexpected file %s", f)
 		}
@@ -85,7 +97,7 @@ func TestBuildIncludesEnvironmentAndProjectInstructions(t *testing.T) {
 	sub := filepath.Join(repo, "cmd")
 	write(t, filepath.Join(sub, "AGENTS.md"), "cmd rules")
 
-	p := Build(Options{Cwd: sub, Now: time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC), Model: "local/m"})
+	p := build(t, Options{Cwd: sub, Now: time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC), Model: "local/m"})
 	rootInstructions, err := filepath.EvalSymlinks(filepath.Join(repo, "AGENTS.md"))
 	if err != nil {
 		t.Fatal(err)
@@ -112,9 +124,33 @@ func TestBuildIncludesEnvironmentAndProjectInstructions(t *testing.T) {
 	}
 
 	// Zero time and empty model leave their lines out entirely.
-	p = Build(Options{Cwd: t.TempDir()})
+	p = build(t, Options{Cwd: t.TempDir()})
 	if strings.Contains(p, "Date:") || strings.Contains(p, "Model:") || strings.Contains(p, "Project instructions") {
 		t.Fatalf("optional lines present:\n%s", p)
+	}
+}
+
+func TestBuildModelOnlyChangesEnvironment(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.Mkdir(filepath.Join(cwd, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(cwd, "AGENTS.md"), "Use the project's test command.")
+	options := Options{Cwd: cwd, Now: time.Date(2026, 9, 25, 0, 0, 0, 0, time.UTC)}
+	baseline := build(t, options)
+	for _, model := range []string{"local/qwen", "deepseek/deepseek-chat", "chatgpt/gpt-5"} {
+		t.Run(model, func(t *testing.T) {
+			options := options
+			options.Model = model
+			got := build(t, options)
+			modelLine := "Model: " + model + "\n"
+			if strings.Count(got, modelLine) != 1 {
+				t.Fatalf("expected exactly one environment line %q", modelLine)
+			}
+			if strings.Replace(got, modelLine, "", 1) != baseline {
+				t.Fatal("model selection changed instructions outside the environment line")
+			}
+		})
 	}
 }
 

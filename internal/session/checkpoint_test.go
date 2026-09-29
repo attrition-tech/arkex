@@ -18,7 +18,7 @@ func TestCheckpointHistorySharesPrefixesAndForksIndependently(t *testing.T) {
 		s.Checkpoint(messages, text, msg, "fake/model")
 		messages = append(messages, msg, fantasy.Message{Role: fantasy.MessageRoleAssistant,
 			Content: []fantasy.MessagePart{fantasy.TextPart{Text: fmt.Sprintf("answer %d", i)}}})
-		s.Update(messages, "fake/model", "auto", 0, 0)
+		s.Update(messages, Usage{Model: "fake/model"})
 	}
 	if len(s.History) != 60 {
 		t.Fatalf("duplicated prefixes: %d", len(s.History))
@@ -45,7 +45,7 @@ func TestCheckpointHistorySharesPrefixesAndForksIndependently(t *testing.T) {
 	}
 	fork.Checkpoint(fork.Messages, "replacement", fantasy.NewUserMessage("replacement"), "fake/model")
 	fork.Messages = append(fork.Messages, fantasy.NewUserMessage("replacement"))
-	fork.Update(fork.Messages, "fake/model", "auto", 0, 0)
+	fork.Update(fork.Messages, Usage{Model: "fake/model"})
 	if UserText(again.History[22]) != "prompt 11" || again.Prompts[11].Text != "prompt 11" {
 		t.Fatal("fork overwrote original backing arrays")
 	}

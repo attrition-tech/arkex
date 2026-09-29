@@ -9,30 +9,18 @@ import (
 
 	"github.com/attrition-tech/arkex/internal/agent"
 	"github.com/attrition-tech/arkex/internal/sanitize"
-	"github.com/attrition-tech/arkex/internal/tools"
 )
 
-// While a tool call waits for the user, the input box becomes the question.
-// Nothing can be typed anyway, so the frame the eye already rests on shows
-// what the tool wants to do, why arkex is asking, and the answers:
-//
-//	╭──────────────────────────────────────────────────────────────╮
-//	│ ● bash needs your permission                                 │
-//	│   $ grep -rn level /logging/config.yaml                      │
-//	│   ⚠ command names a path outside the workspace: /logging     │
-//	│                                                              │
-//	│   ▶ Allow  enter   Allow this session  a   Deny  n / esc     │
-//	╰──────────────────────────────────────────────────────────────╯
-//
-// ←/→ or tab move between the answers, enter takes the marked one, and each
-// answer has its own key. The pointer lights an answer and a click takes it.
+// Retry dialogs replace the input box while a failed response waits for the
+// user. Pointer and keyboard controls select Try again or Cancel.
 
-// approval is the pending prompt plus its interaction state.
+// approval is the pending retry prompt plus its interaction state.
 type approval struct {
 	title     string // optional non-permission dialog title
+	reason    string
 	retry     bool
 	call      agent.ToolCall
-	reply     chan agent.Answer
+	reply     chan bool
 	buttons   []approveButton
 	sel       int // marked answer; enter takes it
 	hover     int // answer under the pointer, -1 for none
@@ -50,7 +38,7 @@ type approval struct {
 type approveButton struct {
 	label  string
 	keys   string // shown after the label, e.g. "enter", "n / esc"
-	answer agent.Answer
+	answer bool
 }
 
 type approveHit struct {
@@ -61,61 +49,13 @@ type approveHit struct {
 // approveBodyLines caps how many rows the command or path may take.
 const approveBodyLines = 3
 
-// newApproval builds the prompt for call. The session answer is offered
-// only when the policy said it would honour it.
-func newApproval(call agent.ToolCall, reply chan agent.Answer) *approval {
-	a := &approval{call: call, reply: reply, hover: -1}
-	a.buttons = []approveButton{{label: "Allow", keys: "enter", answer: agent.AllowOnce}}
-	if call.Grantable {
-		label := "Allow this session"
-		if call.TrustDirectory != "" {
-			a.buttons[0].label = "Allow once"
-			label = "Trust directory"
-		}
-		a.buttons = append(a.buttons, approveButton{label: label, keys: "a", answer: agent.AllowSession})
-	}
-	a.buttons = append(a.buttons, approveButton{label: "Deny", keys: "n / esc", answer: agent.Deny})
-	args := toolArgs(call.Input)
-	str := func(key string) string {
-		v, _ := args[key].(string)
-		return sanitize.Terminal(strings.ReplaceAll(v, "\t", "    "))
-	}
-	switch call.Name {
-	case "bash":
-		a.caption = "Full command · shell paths are heuristic, not a sandbox"
-		a.preview = "Starting directory: " + sanitize.Terminal(call.Workdir) + "\n$ " + str("command")
-	case "edit":
-		a.preview = tools.DiffDetail(str("old_string"), str("new_string"))
-		a.caption = "Proposed replacement"
-		if all, _ := args["replace_all"].(bool); all {
-			a.caption += " · all matches"
-		}
-	case "write":
-		a.preview = tools.DiffDetail("", str("content"))
-		a.caption = "New contents · replaces entire file"
-		if a.preview == "" {
-			a.preview = "(empty file)"
-		}
-	}
-	if call.TrustDirectory != "" {
-		a.preview = "Trust directory: " + sanitize.Terminal(call.TrustDirectory) +
-			"\nAccess: " + call.TrustAccess + "\nIncludes descendants; expires when arkex exits.\n" + a.preview
-		if a.caption == "" {
-			a.caption = "Approval details"
-		}
-	}
-	if call.Reason != "" && (call.TrustDirectory != "" || strings.ContainsAny(call.Reason, "\n\r")) {
-		a.preview = sanitize.Terminal(call.Reason) + "\n" + a.preview
-		if a.caption == "" {
-			a.caption = "Approval details"
-		}
-	}
-	return a
+func newRetry(call agent.ToolCall, reply chan bool) *approval {
+	return &approval{call: call, reply: reply, retry: true, hover: -1}
 }
 
 // answer resolves the prompt. It is safe to call once; the channel is
 // buffered so the agent goroutine never blocks on the UI.
-func (a *approval) answer(ans agent.Answer) { a.reply <- ans }
+func (a *approval) answer(ans bool) { a.reply <- ans }
 
 // move shifts the marked answer by d, wrapping.
 func (a *approval) move(d int) {
@@ -125,20 +65,14 @@ func (a *approval) move(d int) {
 
 // byKey maps a shortcut to an answer; ok is false for keys that are not
 // answers (they are swallowed, not typed).
-func (a *approval) byKey(k string) (agent.Answer, bool) {
+func (a *approval) byKey(k string) (bool, bool) {
 	switch k {
 	case "enter":
 		return a.buttons[a.sel].answer, true
-	case "y", "Y":
-		return agent.AllowOnce, true
-	case "a", "A":
-		if a.call.Grantable {
-			return agent.AllowSession, true
-		}
 	case "n", "N", "esc":
-		return agent.Deny, true
+		return false, true
 	}
-	return agent.Deny, false
+	return false, false
 }
 
 // hitAt returns the answer under a column and action-row offset, or -1.
@@ -169,12 +103,9 @@ func (m *model) approvalView() string {
 	buttons := a.buttonLines(inner, m.width < 80)
 
 	var lines []string
-	head := errStyle.Render("●") + " " + toolStyle.Bold(true).Render(call.Name) + " needs your permission"
+	head := toolStyle.Bold(true).Render("Response unavailable")
 	if a.title != "" {
 		head = toolStyle.Bold(true).Render(a.title)
-	}
-	if call.Grantable && call.Reason == "" && m.width >= 80 {
-		head += dimStyle.Render("  (permission \"ask\" in config)")
 	}
 	lines = append(lines, ansi.Truncate(head, inner, "…"))
 
@@ -192,22 +123,11 @@ func (m *model) approvalView() string {
 			lines = append(lines, "  "+l)
 		}
 	}
-	if call.Reason != "" {
-		if a.title != "" {
-			wrapped := strings.Split(ansi.Wrap(sanitize.Terminal(call.Reason), max(1, inner-2), ""), "\n")
-			for _, line := range wrapped[:min(3, len(wrapped))] {
-				lines = append(lines, "  "+line)
-			}
-		} else {
-			// Truncate limits columns, not embedded newlines. Keep this
-			// summary physically one row; full multiline reasons live in
-			// the scrollable preview so actions remain reachable.
-			reason := strings.Join(strings.Fields(sanitize.Terminal(call.Reason)), " ")
-			lines = append(lines, "  "+gaugeWarnStyle.Render("⚠ ")+ansi.Truncate(reason, max(1, inner-4), "…"))
+	if a.reason != "" {
+		wrapped := strings.Split(ansi.Wrap(sanitize.Terminal(a.reason), max(1, inner-2), ""), "\n")
+		for _, line := range wrapped[:min(3, len(wrapped))] {
+			lines = append(lines, "  "+line)
 		}
-	}
-	if call.TrustDirectory != "" && m.height > 20 {
-		lines = append(lines, "  "+dimStyle.Render(ansi.Truncate("Trust directory = "+call.TrustAccess+" · until arkex exits", inner-2, "…")))
 	}
 	if a.preview != "" {
 		// Reserve borders, actions, footer and some transcript context.
@@ -254,12 +174,6 @@ func (a *approval) buttonLines(inner int, compact bool) []string {
 		}
 		if inner < 30 {
 			name := b.label
-			if b.answer == agent.AllowSession {
-				name = "Session"
-				if a.call.TrustDirectory != "" {
-					name = "Trust"
-				}
-			}
 			label = " " + ansi.Truncate(name, max(1, inner-2), "…") + " "
 		}
 		s := style.Render(label)
@@ -344,9 +258,9 @@ func approvalBody(call agent.ToolCall, cwd string) string {
 // approvalHint is the status line under the box while a prompt is up.
 func approvalHint(width int) string {
 	if width < 80 {
-		return "←/→ pick · enter confirm · esc deny"
+		return "←/→ pick · enter confirm · esc cancel"
 	}
-	return "←/→ pick · enter confirm · y allow · n / esc deny · ctrl+c twice stops the run"
+	return "←/→ pick · enter confirm · n / esc cancel · ctrl+c twice stops the run"
 }
 
 // approvalButtonY is the first action row; compact layouts may wrap actions.

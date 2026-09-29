@@ -25,6 +25,57 @@ func TestMarkdownHeadingsWithoutMarkers(t *testing.T) {
 	}
 }
 
+func TestMarkdownFencesDoNotGuessLanguages(t *testing.T) {
+	old := theme
+	applyTheme(themes[0])
+	t.Cleanup(func() { applyTheme(old) })
+	for _, body := range []string{
+		"package main\n\nfunc main() {\n    println(\"hello\")\n}\n",
+		"rows ∩ claim-chip ∩ search\n  ↓\nGET /statements → StatementRow\n  ↓\nproject(reports, hasImageAttachment)\n",
+	} {
+		for _, prefix := range []string{"", "> "} {
+			for _, close := range []string{"", "```\n"} {
+				fence := func(language string) string {
+					return prefix + strings.ReplaceAll("```"+language+"\n"+body+close, "\n", "\n"+prefix)
+				}
+				var md markdown
+				want := md.render(fence("text"), 100)
+				for _, language := range []string{"", "diagram", "arkex-unknown-language", "text", "plaintext"} {
+					if got := md.render(fence(language), 100); got != want {
+						t.Fatalf("fence %q (nested=%v, closed=%v) differs from plain text:\n%q\nwant:\n%q", language, prefix != "", close != "", got, want)
+					}
+				}
+				// Normalizing a label must not rewrite the body or eat blank lines.
+				plain := ansi.Strip(want)
+				for _, line := range strings.Split(strings.TrimSpace(body), "\n") {
+					if line != "" && !strings.Contains(plain, line) {
+						t.Fatalf("fence content lost %q: %q", line, plain)
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestMarkdownRecognizedFencesKeepHighlighting(t *testing.T) {
+	old := theme
+	applyTheme(themes[0])
+	t.Cleanup(func() { applyTheme(old) })
+	for _, tc := range []struct{ language, body string }{
+		{"go", "package main\nfunc main() { println(42) }"},
+		{"golang", "package main\nfunc main() { println(42) }"},
+		{"typescript", "const count: number = 42;"},
+		{"js", "const count = 42;"},
+	} {
+		var md markdown
+		plain := md.render("```text\n"+tc.body+"\n```", 100)
+		highlighted := md.render("```"+tc.language+"\n"+tc.body+"\n```", 100)
+		if highlighted == plain || ansi.Strip(highlighted) != ansi.Strip(plain) {
+			t.Fatalf("%s fence lost highlighting or changed text: %q", tc.language, highlighted)
+		}
+	}
+}
+
 func TestMarkdownRenderTidy(t *testing.T) {
 	var md markdown
 	out := md.render("Hello **world**\n\n- one\n- two", 40)
@@ -94,12 +145,12 @@ func TestRenderToolTails(t *testing.T) {
 }
 
 func TestRenderToolDenied(t *testing.T) {
-	b := &block{kind: blockTool, name: "edit", status: "denied", summary: "plan mode permits only read-only tools", args: toolArgs(`{"path":"a.go"}`)}
+	b := &block{kind: blockTool, name: "edit", status: "denied", summary: "denied by config", args: toolArgs(`{"path":"a.go"}`)}
 	out := ansi.Strip(renderTool(b, "", 80, false, false))
 	if out != "✗ edit a.go · denied ▸" {
 		t.Fatalf("denied card collapsed:\n%s", out)
 	}
-	if out = ansi.Strip(renderTool(b, "", 80, true, false)); !strings.Contains(out, "plan mode") {
+	if out = ansi.Strip(renderTool(b, "", 80, true, false)); !strings.Contains(out, "denied by config") {
 		t.Fatalf("denied card expanded should show the reason:\n%s", out)
 	}
 }

@@ -75,7 +75,7 @@ def github(tag, directory):
     ver = tag.removeprefix("v")
     names = [f"arkex_{ver}_{platform}.{extension}" for platform, extension in (
         ("darwin_amd64", "tar.gz"), ("darwin_arm64", "tar.gz"),
-        ("linux_amd64", "tar.gz"), ("linux_arm64", "tar.gz"), ("windows_amd64", "zip"))]
+        ("linux_amd64", "tar.gz"), ("linux_arm64", "tar.gz"))]
     names += ["SHA256SUMS", "SHA256SUMS.sig"]
     if any(not (directory / name).is_file() for name in names):
         raise ValueError("Missing release assets")
@@ -94,6 +94,9 @@ def github(tag, directory):
         if release is None:
             raise ValueError("Created draft is not visible yet; rerun the GitHub release job")
     existing = {a["name"] for a in release["assets"]}
+    unexpected = existing - set(names)
+    if unexpected:
+        raise ValueError("Unexpected GitHub assets; inspect manually before publication: " + ", ".join(sorted(unexpected)))
     with tempfile.TemporaryDirectory(prefix="arkex-release-") as temp:
         for name in names:
             if name in existing:

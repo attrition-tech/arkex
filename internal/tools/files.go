@@ -32,12 +32,6 @@ func resolvePath(root, p string) (string, error) {
 		}
 		p = home + p[1:]
 	}
-	// On Windows, filepath.IsAbs reports a rooted path such as \Windows as
-	// incomplete because it has no volume. It is nevertheless absolute on the
-	// current root's drive and must not be joined beneath the workspace.
-	if volume := filepath.VolumeName(root); volume != "" && filepath.VolumeName(p) == "" && (strings.HasPrefix(p, "/") || strings.HasPrefix(p, `\`)) {
-		p = volume + p
-	}
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(root, p)
 	}
@@ -171,8 +165,8 @@ func isBinary(b []byte) bool {
 	return false
 }
 
-// Write creates or overwrites a file.
-type Write struct{ Root string }
+// Write creates or overwrites a file within the session write roots.
+type Write struct{ Root, TempDir string }
 
 type writeInput struct {
 	Path    string `json:"path"`
@@ -200,10 +194,15 @@ func (t *Write) Run(_ context.Context, input json.RawMessage) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	root, name, err := writeRoot(t.Root, t.TempDir, path)
+	if err != nil {
 		return Result{}, err
 	}
-	if err := os.WriteFile(path, []byte(in.Content), 0o644); err != nil {
+	defer func() { _ = root.Close() }()
+	if err := root.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+		return Result{}, err
+	}
+	if err := replaceFile(root, name, []byte(in.Content)); err != nil {
 		return Result{}, err
 	}
 	n := strings.Count(in.Content, "\n")
@@ -214,8 +213,8 @@ func (t *Write) Run(_ context.Context, input json.RawMessage) (Result, error) {
 	}, nil
 }
 
-// Edit replaces an exact string in a file.
-type Edit struct{ Root string }
+// Edit replaces an exact string in a file within the session write roots.
+type Edit struct{ Root, TempDir string }
 
 type editInput struct {
 	Path       string `json:"path"`
@@ -253,7 +252,12 @@ func (t *Edit) Run(_ context.Context, input json.RawMessage) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	b, err := os.ReadFile(path)
+	root, name, err := writeRoot(t.Root, t.TempDir, path)
+	if err != nil {
+		return Result{}, err
+	}
+	defer func() { _ = root.Close() }()
+	b, err := root.ReadFile(name)
 	if err != nil {
 		return Result{}, err
 	}
@@ -271,7 +275,7 @@ func (t *Edit) Run(_ context.Context, input json.RawMessage) (Result, error) {
 	} else {
 		out = strings.Replace(src, in.OldString, in.NewString, 1)
 	}
-	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
+	if err := replaceFile(root, name, []byte(out)); err != nil {
 		return Result{}, err
 	}
 	return Result{

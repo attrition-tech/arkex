@@ -7,8 +7,6 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-
-	"github.com/attrition-tech/arkex/internal/agent"
 )
 
 func key(s string) tea.KeyPressMsg {
@@ -52,8 +50,7 @@ func key(s string) tea.KeyPressMsg {
 func testModel(t testing.TB) (*model, *string) {
 	sel := new(string)
 	m := newModel(Options{
-		Cwd:  t.TempDir(),
-		Mode: agent.NewModePolicy(agent.ModeBuild, nil),
+		Cwd: t.TempDir(),
 		Connect: func(_ context.Context, s string) (Connection, error) {
 			*sel = s
 			return Connection{}, errors.New("test")
@@ -112,26 +109,11 @@ func TestPaletteOpensOnSlashOnlyWhenEmpty(t *testing.T) {
 
 func TestPaletteFilterAndRun(t *testing.T) {
 	m, sel := testModel(t)
-
-	typeKeys(m, "/", "p", "l", "a", "n")
-	if len(m.pal.view) == 0 || !strings.HasPrefix(m.pal.view[0].title, "Plan") {
-		t.Fatalf("filter 'plan' should rank the Plan mode first, got %q", titles(m.pal.view))
-	}
-	typeKeys(m, "enter")
-	if m.pal != nil || m.mode() != agent.ModePlan {
-		t.Fatalf("enter must run the row and close: pal=%v mode=%s", m.pal != nil, m.mode())
-	}
-
-	// Unfiltered rows keep registration order and the current mode is marked.
 	typeKeys(m, "/")
-	var current string
 	for _, it := range m.pal.view {
-		if it.group == "Mode" && it.hint == "current" {
-			current = it.title
+		if it.group == "Mode" || strings.HasPrefix(strings.ToLower(it.title), "switch to plan") || strings.HasPrefix(strings.ToLower(it.title), "switch to build") {
+			t.Fatalf("deleted mode command still present: %+v", it)
 		}
-	}
-	if !strings.HasPrefix(current, "Plan") {
-		t.Fatalf("current mode row = %q", current)
 	}
 
 	// "Switch model" opens a nested list; esc backs out to the top level.
@@ -171,7 +153,7 @@ func TestPaletteRendersCentered(t *testing.T) {
 	if box == "" || x < 10 || y < 1 || cur == nil {
 		t.Fatalf("box empty or not centered: x=%d y=%d cursor=%v", x, y, cur)
 	}
-	if !strings.Contains(box, "Commands") || !strings.Contains(box, "Suggested") || !strings.Contains(box, "/mode") {
+	if !strings.Contains(box, "Commands") || !strings.Contains(box, "Suggested") || strings.Contains(box, "/mode") {
 		t.Fatalf("box missing title, group or hint:\n%s", box)
 	}
 	out := overlay(strings.Repeat(strings.Repeat("x", 100)+"\n", 29)+strings.Repeat("x", 100), box, x, y)

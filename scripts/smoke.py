@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Native binary smoke test: python scripts/smoke.py path/to/arkex[.exe].
+"""Native binary smoke test: python scripts/smoke.py path/to/arkex.
 
 No credentials or external network; isolated home/workspace, ephemeral HTTP port.
-Runs on Linux, macOS and Windows without a POSIX shell.
+Runs on Linux and macOS without relying on shell behavior.
 """
 import json
 import os
@@ -32,7 +32,7 @@ def main():
             config["connections"]["fake"]["baseUrl"] = f"http://127.0.0.1:{server.server_port}/v1"
             (home / "config.json").write_text(json.dumps(config), encoding="utf-8")
             (work / "go.mod").write_text("module example.com/arkex-smoke\n", encoding="utf-8")
-            env = dict(os.environ, ARKEX_HOME=str(home), HOME=str(home), USERPROFILE=str(home), NO_COLOR="1")
+            env = dict(os.environ, ARKEX_HOME=str(home), HOME=str(home), NO_COLOR="1")
 
             def run(*args):
                 result = subprocess.run([binary, *args], cwd=work, env=env,
@@ -47,7 +47,7 @@ def main():
             assert any(e["type"] == "text_delta" and "pong" in json.dumps(e["data"]) for e in events), events
             assert events[-1]["type"] == "run_end", events
             assert not events[-1]["data"].get("error"), events[-1]
-            result = run("--json", "--mode", "auto", "-p", "what is in go.mod?")
+            result = run("--json", "-p", "what is in go.mod?")
             events = [json.loads(line) for line in result.stdout.splitlines()]
             results = [e["data"] for e in events if e["type"] == "tool_result"]
             assert len(results) == 1 and not results[0]["is_error"], results

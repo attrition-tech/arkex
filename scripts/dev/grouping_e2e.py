@@ -58,10 +58,10 @@ with tempfile.TemporaryDirectory(prefix="arkex-grouping-") as temp:
     (home / "config.json").write_text(json.dumps(config))
     command = "env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE " + " ".join(shlex.quote(x) for x in [
         "TERM=xterm-256color", "COLORTERM=truecolor", "HOME=" + temp, "ARKEX_HOME=" + temp,
-        "SHELL=/bin/sh", binary, "--mode", "auto"])
+        "SHELL=/bin/sh", binary])
     try:
         tmux("new-session", "-d", "-s", "test", "-x", "120", "-y", "42", "-c", temp, command)
-        wait(lambda s: "command palette" in s, "startup")
+        wait(lambda s: "Ask a question, describe a task" in s, "startup")
         tmux("send-keys", "-t", "test", "-l", "grouping-test")
         tmux("send-keys", "-t", "test", "Enter")
         live = wait(lambda s: "Earlier work · 6 actions · 1 failed" in s and "sleep 20" in s, "live archive")

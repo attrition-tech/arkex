@@ -11,7 +11,6 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/attrition-tech/arkex/internal/agent"
 	"github.com/attrition-tech/arkex/internal/config"
 )
 
@@ -228,7 +227,6 @@ func (p *palette) activate(m *model) tea.Cmd {
 
 // paletteItems builds the top level from the current state.
 func (m *model) paletteItems() []paletteItem {
-	next := m.mode().Next()
 	var items []paletteItem
 	if m.sess.Agent == nil {
 		items = append(items, paletteItem{group: "Suggested", title: "Connections", hint: "/connections", cmd: "/connections"})
@@ -236,7 +234,6 @@ func (m *model) paletteItems() []paletteItem {
 		items = append(items, paletteItem{group: "Suggested", title: "Switch model", hint: "/model", sub: modelItems})
 	}
 	items = append(items,
-		paletteItem{group: "Suggested", title: "Switch to " + string(next) + " mode", hint: "/mode", cmd: "/mode " + string(next)},
 		paletteItem{group: "Suggested", title: "New conversation", hint: "/clear", cmd: "/clear"},
 	)
 	if m.conv == nil && m.hasSessions() {
@@ -273,24 +270,7 @@ func (m *model) paletteItems() []paletteItem {
 		paletteItem{group: "Models", title: "Switch model", hint: "/model", sub: modelItems},
 		paletteItem{group: "Models", title: "Connections", hint: "/connections", cmd: "/connections"},
 	)
-	for _, md := range agent.Modes {
-		hint := "/mode " + string(md)
-		if md == m.mode() {
-			hint = "current"
-		}
-		items = append(items, paletteItem{group: "Mode", title: modeTitle(md), hint: hint, cmd: "/mode " + string(md)})
-	}
 	return items
-}
-
-func modeTitle(md agent.Mode) string {
-	switch md {
-	case agent.ModePlan:
-		return "Plan mode — read-only tools, the model writes a plan"
-	case agent.ModeAuto:
-		return "Auto mode — trusted scope runs quietly; config denies apply"
-	}
-	return "Build mode — edits and commands ask per config"
 }
 
 // modelItems lists enabled provider/model ids from the config.

@@ -46,6 +46,9 @@ func (m *model) runShell(command string) tea.Cmd {
 	m.refresh()
 
 	dir := m.o.Cwd
+	if m.o.Workspace != "" {
+		dir = m.o.Workspace
+	}
 	return func() tea.Msg {
 		in, _ := json.Marshal(map[string]any{"command": command})
 		start := time.Now()

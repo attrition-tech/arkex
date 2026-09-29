@@ -3,6 +3,7 @@ package tui
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -168,6 +169,36 @@ func TestBangRunsShellAndAttachesOutput(t *testing.T) {
 	msgText := "now fix it" + notes
 	if got := session.UserText(fantasy.NewUserMessage(msgText)); got != "now fix it" {
 		t.Fatalf("UserText = %q", got)
+	}
+}
+
+func TestBangUsesPinnedWorkspaceNotSessionAlias(t *testing.T) {
+	t.Setenv("ARKEX_HOME", t.TempDir())
+	workspace, outside := t.TempDir(), t.TempDir()
+	alias := filepath.Join(t.TempDir(), "workspace-link")
+	if err := os.Symlink(workspace, alias); err != nil {
+		t.Fatal(err)
+	}
+	m := newModel(Options{Cwd: alias, Workspace: workspace})
+	if m.hist.path != historyPath(alias) {
+		t.Fatal("history identity no longer uses the launch path")
+	}
+	if err := os.Remove(alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, alias); err != nil {
+		t.Fatal(err)
+	}
+	msg := m.runShell("printf pinned > marker")().(shellDoneMsg)
+	if msg.err != nil {
+		t.Fatalf("shell failed: %v: %s", msg.err, msg.res.Output)
+	}
+	data, err := os.ReadFile(filepath.Join(workspace, "marker"))
+	if err != nil || string(data) != "pinned" {
+		t.Fatalf("shell lost its original workspace: %q: %v", data, err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "marker")); !os.IsNotExist(err) {
+		t.Fatal("session alias redirected a shell write")
 	}
 }
 

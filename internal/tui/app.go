@@ -47,6 +47,9 @@ type Options struct {
 	Session Connection
 	Cwd     string
 	Version string
+	// Workspace is the canonical tool root. Cwd retains the launch path for
+	// existing session/history keys. Empty uses Cwd for embedded callers.
+	Workspace string
 	// Connect builds a fresh agent for a model selector. Used by /model and
 	// the Connections panel.
 	Connect func(ctx context.Context, selector string) (Connection, error)

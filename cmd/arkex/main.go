@@ -110,7 +110,9 @@ func runRoot(ctx context.Context, f rootFlags, args []string) error {
 	if err != nil {
 		return err
 	}
-	cwd, err = filepath.EvalSymlinks(cwd)
+	// Retain the launch path for session/history identity, as in released
+	// versions. Pin a separate canonical root for tool confinement.
+	workspace, err := filepath.EvalSymlinks(cwd)
 	if err != nil {
 		return err
 	}
@@ -146,7 +148,7 @@ func runRoot(ctx context.Context, f rootFlags, args []string) error {
 			}
 		}
 		if !f.noTools {
-			return tools.CheckSandbox(ctx, cwd, dir)
+			return tools.CheckSandbox(ctx, workspace, dir)
 		}
 		return nil
 	}
@@ -169,7 +171,7 @@ func runRoot(ctx context.Context, f rootFlags, args []string) error {
 		if err != nil {
 			return nil, config.ModelRef{}, err
 		}
-		system, err := prompt.Build(prompt.Options{Cwd: cwd, Now: time.Now(), Model: ref.String(), ReadFile: func(path string) ([]byte, error) {
+		system, err := prompt.Build(prompt.Options{Cwd: workspace, Now: time.Now(), Model: ref.String(), ReadFile: func(path string) ([]byte, error) {
 			if cfg.Permission("read") != config.PermissionAllow {
 				return nil, errors.New("read denied by config")
 			}
@@ -182,7 +184,7 @@ func runRoot(ctx context.Context, f rootFlags, args []string) error {
 			Model: model, System: system, Policy: agent.ConfigPolicy{Config: cfg},
 		}
 		if !f.noTools {
-			ag.Tools = tools.Default(cwd)
+			ag.Tools = tools.Default(workspace)
 		} else {
 			ag.Tools = tools.NewRegistry()
 		}
@@ -275,6 +277,7 @@ func runRoot(ctx context.Context, f rootFlags, args []string) error {
 	opts := tui.Options{
 		Prepare:     prepare,
 		Cwd:         cwd,
+		Workspace:   workspace,
 		Version:     version,
 		Resume:      f.resume,
 		ResumeModel: f.model,

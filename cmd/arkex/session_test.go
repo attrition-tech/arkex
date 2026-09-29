@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"charm.land/fantasy"
@@ -16,8 +18,14 @@ func TestPrintResumeUsesSavedModelUnlessOverridden(t *testing.T) {
 	for _, override := range []string{"", "local/b:low"} {
 		t.Run("override="+override, func(t *testing.T) {
 			t.Setenv("ARKEX_HOME", t.TempDir())
-			cwd := t.TempDir()
+			// Session identity must retain the launch path used by released
+			// versions, even when tool confinement resolves it to a real path.
+			cwd := filepath.Join(t.TempDir(), "workspace-link")
+			if err := os.Symlink(t.TempDir(), cwd); err != nil {
+				t.Fatal(err)
+			}
 			t.Chdir(cwd)
+			t.Setenv("PWD", cwd)
 			requests := make(chan map[string]any, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				var body map[string]any

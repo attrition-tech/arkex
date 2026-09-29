@@ -41,7 +41,7 @@ func (*Bash) Schema() map[string]any {
 	return schema(map[string]any{
 		"command":    prop("string", "Shell command to run"),
 		"workdir":    prop("string", "Starting directory, absolute or workspace-relative; defaults to the workspace. Use instead of cd. Supports ~/ but not shell expansions."),
-		"timeout_ms": prop("integer", "Timeout in milliseconds. Default 120000"),
+		"timeout_ms": prop("integer", "Shell execution timeout in milliseconds, excluding sandbox preparation and publication. Default 120000; maximum 600000. Cancellation still stops the whole operation."),
 	}, "command")
 }
 
@@ -57,8 +57,10 @@ func (t *Bash) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 	if in.TimeoutMS > 0 {
 		timeout = min(time.Duration(in.TimeoutMS)*time.Millisecond, maxBashTimeout)
 	}
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
+	// Bind the command to a cancelable context now, but arm its timer only
+	// after preparation. Filesystem work still obeys the caller's context.
+	executionCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 
 	sh, err := resolveShell(t.Shell, os.Getenv("SHELL"))
 	if err != nil {
@@ -72,7 +74,7 @@ func (t *Bash) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 		}
 		dir = resolved
 	}
-	run, err := sandboxCommand(ctx, t.Dir, t.TempDir, dir, sh, "-c", in.Command)
+	run, err := sandboxCommand(executionCtx, t.Dir, t.TempDir, dir, sh, "-c", in.Command)
 	if err != nil {
 		return Result{}, err
 	}
@@ -91,7 +93,16 @@ func (t *Bash) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 	cmd.WaitDelay = 2 * time.Second
 
 	start := time.Now()
+	timeoutDone := make(chan struct{})
+	timer := time.AfterFunc(timeout, func() {
+		cancel(context.DeadlineExceeded)
+		close(timeoutDone)
+	})
 	err = cmd.Run()
+	if !timer.Stop() {
+		<-timeoutDone
+	}
+	executionErr := context.Cause(executionCtx)
 	dur := time.Since(start).Round(time.Millisecond)
 	// Best-effort child cleanup; write safety does not depend on descendants
 	// exiting. Publication copies captured bytes, never execution inodes.
@@ -99,7 +110,7 @@ func (t *Bash) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 		_ = cmd.Cancel()
 	}
 	var publishErr error
-	if ctx.Err() == nil && cmd.ProcessState != nil {
+	if executionErr == nil && cmd.ProcessState != nil {
 		publishErr = run.Publish(ctx)
 	}
 
@@ -112,14 +123,18 @@ func (t *Bash) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 	summary := firstLine(in.Command)
 	switch {
 	case publishErr != nil:
-		fmt.Fprintf(&sb, "[command exit: %v; %v]", err, publishErr)
+		if err == nil {
+			fmt.Fprintf(&sb, "[command succeeded; sandbox publication failed: %v]", publishErr)
+		} else {
+			fmt.Fprintf(&sb, "[command exit: %v; sandbox publication failed: %v]", err, publishErr)
+		}
 		return Result{Output: sb.String(), Summary: summary}, publishErr
-	case ctx.Err() == context.DeadlineExceeded:
+	case executionErr == context.DeadlineExceeded:
 		fmt.Fprintf(&sb, "[command timed out after %s]\n[unpublished command changes discarded]", timeout)
 		return Result{Output: sb.String(), Summary: summary}, errors.New("timed out")
-	case ctx.Err() != nil:
+	case executionErr != nil:
 		sb.WriteString("[command canceled; unpublished command changes discarded]")
-		return Result{Output: sb.String(), Summary: summary}, ctx.Err()
+		return Result{Output: sb.String(), Summary: summary}, executionErr
 	case err != nil:
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {

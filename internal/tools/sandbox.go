@@ -82,7 +82,7 @@ func sandboxCommand(ctx context.Context, workspace, scratch, workdir, program st
 		if err != nil {
 			return nil, err
 		}
-		tree.before, err = snapshotTree(ctx, tree.host, tree.execution)
+		tree.before, err = snapshotTree(ctx, tree.host, tree.execution, nil)
 		if err != nil {
 			return nil, fmt.Errorf("prepare private execution: %w", err)
 		}

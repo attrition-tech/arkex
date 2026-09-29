@@ -81,8 +81,11 @@ Nonzero command exits still publish valid changes; cancellation discards
 unpublished changes. Unsupported entries (devices, sockets, FIFOs), directory
 type transitions, and symlinks into private execution paths block publication.
 Ownership, ACLs, arbitrary xattrs and hard-link identity are not reproduced.
-Each root is copied and scanned per command, with limits of 8 GiB and 250,000
-entries; this costs disk space and time on large projects.
+Each root is copied before execution and content-hashed afterward, with limits
+of 8 GiB and 250,000 entries. Only changed regular files receive a second,
+trusted capture copy; unchanged trees need no further host scan. Preparation
+still costs disk space and time on large projects. The shell timeout covers
+execution, not preparation or publication; caller cancellation applies throughout.
 
 This boundary assumes a trusted host that does not move authorized roots,
 insert mount aliases, or inject host inodes into private execution directories.

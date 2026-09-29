@@ -2,6 +2,8 @@ package tools
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -295,5 +297,253 @@ func TestSandboxRejectsOversizedInputBeforeExecution(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "must-not-run")); !os.IsNotExist(err) {
 		t.Fatal("setup failure ran the command")
+	}
+}
+
+// Model dependency trees with many small files and deep paths, rather than
+// a few large files: rooted path traversal was the dominant cost here.
+func sandboxDependencies(t testing.TB, workspace string) {
+	t.Helper()
+	data := []byte(strings.Repeat("export type Dependency = string;\n", 32))
+	for pkg := range 200 {
+		dir := filepath.Join(workspace, "web/node_modules", fmt.Sprint(pkg), "node_modules/library/dist/types/parsers")
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		for file := range 50 {
+			if err := os.WriteFile(filepath.Join(dir, fmt.Sprintf("%d.d.ts", file)), data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}
+
+func TestBashDependencyTreeDoesNotConsumeCommandTimeout(t *testing.T) {
+	workspace := t.TempDir()
+	sandboxDependencies(t, workspace)
+	sandboxFixture(t, filepath.Join(workspace, "source"), "matched\n")
+	start := time.Now()
+	res, err := runBash(t, &Bash{Dir: workspace, Shell: "/bin/sh"}, map[string]any{
+		"command": "cat source; printf published > result", "timeout_ms": 500,
+	})
+	t.Logf("10,000 dependency files: %s", time.Since(start))
+	if err != nil || res.Output != "matched\n" {
+		t.Fatalf("short command failed due to sandbox overhead: %v: %s", err, res.Output)
+	}
+	sandboxContents(t, filepath.Join(workspace, "result"), "published")
+}
+
+func BenchmarkSandboxDependencyTree(b *testing.B) {
+	workspace := b.TempDir()
+	sandboxDependencies(b, workspace)
+	for b.Loop() {
+		run, err := sandboxCommand(b.Context(), workspace, "", workspace, "/bin/sh", "-c", "true")
+		if err != nil {
+			b.Fatal(err)
+		}
+		err = run.cmd.Run()
+		if err == nil {
+			err = run.Publish(b.Context())
+		}
+		run.Close()
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func TestSandboxSelectiveCaptureStillHashesUnchangedMetadata(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.Mkdir(filepath.Join(workspace, "deep"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sandboxFixture(t, filepath.Join(workspace, "deep/file"), "original")
+	sandboxFixture(t, filepath.Join(workspace, "unchanged"), "keep")
+	run := preparedSandbox(t, workspace, "", "true")
+	executeSandbox(t, run)
+	path := filepath.Join(run.trees[0].execution, "deep/file")
+	before, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandboxFixture(t, path, "modified") // Same length and restored mtime: stat-only detection misses it.
+	if err := os.Chtimes(path, before.ModTime(), before.ModTime()); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.Publish(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	sandboxContents(t, filepath.Join(workspace, "deep/file"), "modified")
+	sandboxContents(t, filepath.Join(run.temp, "capture-0/deep/file"), "modified")
+	if _, err := os.Stat(filepath.Join(run.temp, "capture-0/unchanged")); !os.IsNotExist(err) {
+		t.Fatalf("unchanged payload was copied: %v", err)
+	}
+	// Captured and published files must both be detached from execution FDs.
+	sandboxFixture(t, path, "lateedit")
+	sandboxContents(t, filepath.Join(workspace, "deep/file"), "modified")
+	sandboxContents(t, filepath.Join(run.temp, "capture-0/deep/file"), "modified")
+}
+
+func TestSandboxNoopDoesNotScanOrCopyHostAgain(t *testing.T) {
+	workspace := t.TempDir()
+	sandboxFixture(t, filepath.Join(workspace, "file"), "before")
+	run := preparedSandbox(t, workspace, "", "true")
+	executeSandbox(t, run)
+	sandboxFixture(t, filepath.Join(workspace, "file"), "host edit")
+	// This would reject a host snapshot, but a no-op has nothing to publish.
+	if err := unix.Mkfifo(filepath.Join(workspace, "host-fifo"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.Publish(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	sandboxContents(t, filepath.Join(workspace, "file"), "host edit")
+	entries, err := os.ReadDir(filepath.Join(run.temp, "capture-0"))
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("no-op created capture payloads: %v: %v", entries, err)
+	}
+}
+
+// Use existing context checkpoints to deterministically mutate a file between
+// the comparison read and the trusted capture read, without production hooks.
+type sandboxMutationContext struct {
+	context.Context
+	check func()
+}
+
+func (c sandboxMutationContext) Err() error {
+	c.check()
+	return c.Context.Err()
+}
+
+func TestSandboxCaptureDetectsChangingSource(t *testing.T) {
+	for _, mutation := range []string{"same-length", "truncate", "grow", "replace-with-symlink"} {
+		t.Run(mutation, func(t *testing.T) {
+			workspace := t.TempDir()
+			sandboxFixture(t, filepath.Join(workspace, "file"), "original")
+			run := preparedSandbox(t, workspace, "", "printf modified > file")
+			executeSandbox(t, run)
+			path := filepath.Join(run.trees[0].execution, "file")
+			mutated := false
+			ctx := sandboxMutationContext{Context: t.Context(), check: func() {
+				if mutated {
+					return
+				}
+				if _, err := os.Stat(filepath.Join(run.temp, "capture-0/file")); err != nil {
+					return
+				}
+				mutated = true
+				switch mutation {
+				case "same-length":
+					info, err := os.Stat(path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					sandboxFixture(t, path, "tampered")
+					if err := os.Chtimes(path, info.ModTime(), info.ModTime()); err != nil {
+						t.Fatal(err)
+					}
+				case "truncate":
+					sandboxFixture(t, path, "short")
+				case "grow":
+					sandboxFixture(t, path, "longer than captured")
+				case "replace-with-symlink":
+					outside := filepath.Join(t.TempDir(), "outside")
+					sandboxFixture(t, outside, "must not capture")
+					if err := os.Remove(path); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Symlink(outside, path); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}}
+			err := run.Publish(ctx)
+			if !mutated {
+				t.Fatal("did not exercise the capture race")
+			}
+			if mutation == "replace-with-symlink" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				sandboxContents(t, filepath.Join(workspace, "file"), "modified")
+			} else {
+				if err == nil || !strings.Contains(err.Error(), "file changed during capture") {
+					t.Fatalf("mutation was not rejected: %v", err)
+				}
+				sandboxContents(t, filepath.Join(workspace, "file"), "original")
+			}
+		})
+	}
+}
+
+func TestSandboxDirectorySubstitution(t *testing.T) {
+	for _, replacement := range []string{"fifo", "directory", "outside-symlink", "inside-symlink"} {
+		t.Run(replacement, func(t *testing.T) {
+			workspace := t.TempDir()
+			path := filepath.Join(workspace, "dir")
+			if err := os.Mkdir(path, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			source, err := os.OpenRoot(workspace)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = source.Close() }()
+			held, err := source.OpenFile("dir", os.O_RDONLY|unix.O_DIRECTORY, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = held.Close() }()
+			if err := os.Rename(path, filepath.Join(workspace, "moved")); err != nil {
+				t.Fatal(err)
+			}
+			switch replacement {
+			case "fifo":
+				err = unix.Mkfifo(path, 0o600)
+			case "directory":
+				err = os.Mkdir(path, 0o700)
+			case "outside-symlink":
+				err = os.Symlink(t.TempDir(), path)
+			case "inside-symlink":
+				err = os.Symlink("moved", path)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() {
+				root, err := snapshotDirectory(source, "dir", held)
+				if root != nil {
+					_ = root.Close()
+				}
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				// A contained alias to the exact pinned directory grants no new access.
+				if (err == nil) != (replacement == "inside-symlink") {
+					t.Fatalf("substitution result: %v", err)
+				}
+			case <-time.After(2 * time.Second):
+				// Unblock an accidentally blocking FIFO open so test cleanup completes.
+				if replacement == "fifo" {
+					if fd, err := unix.Open(path, unix.O_RDWR|unix.O_NONBLOCK, 0); err == nil {
+						_ = unix.Close(fd)
+					}
+				}
+				<-done
+				t.Fatal("directory substitution blocked snapshot traversal")
+			}
+		})
+	}
+}
+
+func TestBashParentCancellationStillStopsPreparation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err := (&Bash{Dir: t.TempDir(), Shell: "/bin/sh"}).Run(ctx, []byte(`{"command":"printf must-not-run"}`))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("caller cancellation was lost: %v", err)
 	}
 }

@@ -46,11 +46,29 @@ func (r sandboxReader) Read(p []byte) (int, error) {
 	return r.Reader.Read(p)
 }
 
+func snapshotDirectory(source *os.Root, name string, dir *os.File) (*os.Root, error) {
+	// The literal /. forces a directory open even if a descendant swaps name
+	// for a FIFO. filepath.Join would incorrectly remove this suffix.
+	root, err := source.OpenRoot(name + "/.")
+	if err != nil {
+		return nil, err
+	}
+	held, statErr := dir.Stat()
+	pinned, pinErr := root.Stat(".")
+	if statErr != nil || pinErr != nil || !os.SameFile(held, pinned) {
+		_ = root.Close()
+		return nil, fmt.Errorf("directory changed during snapshot: %s", name)
+	}
+	return root, nil
+}
+
 // snapshotTree copies to fresh inodes, or only hashes when destination is empty.
+// With a baseline, it captures only changed regular files. The manifest still
+// contains every entry; absent capture payloads must never imply deletions.
 // The returned manifest describes the bytes actually captured, not a separate
 // earlier stat/read. An active hostile writer can produce inconsistent bytes,
 // but cannot retain a writable descriptor to the captured files.
-func snapshotTree(ctx context.Context, source *os.Root, destination string) (map[string]sandboxEntry, error) {
+func snapshotTree(ctx context.Context, source *os.Root, destination string, baseline map[string]sandboxEntry) (map[string]sandboxEntry, error) {
 	var dest *os.Root
 	if destination != "" {
 		if err := os.Mkdir(destination, 0o700); err != nil {
@@ -65,8 +83,9 @@ func snapshotTree(ctx context.Context, source *os.Root, destination string) (map
 	}
 	entries := make(map[string]sandboxEntry)
 	remaining := sandboxTreeBytes
-	var walk func(string) error
-	walk = func(name string) error {
+	buffer := make([]byte, 32*1024)
+	var walk func(*os.Root, *os.Root, string, string) error
+	walk = func(source, dest *os.Root, name, path string) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -81,7 +100,7 @@ func snapshotTree(ctx context.Context, source *os.Root, destination string) (map
 		switch {
 		case info.Mode()&os.ModeSymlink != 0:
 			entry.link, err = source.Readlink(name)
-			if err == nil && dest != nil {
+			if err == nil && dest != nil && baseline == nil {
 				err = dest.Symlink(entry.link, name)
 			}
 		case info.IsDir():
@@ -90,18 +109,33 @@ func snapshotTree(ctx context.Context, source *os.Root, destination string) (map
 			if err != nil {
 				break
 			}
-			if dest != nil && name != "." {
-				err = dest.Mkdir(name, 0o700)
+			defer func() { _ = dir.Close() }()
+			// Keep traversal relative to pinned directories, not the tree root.
+			childSource, openErr := snapshotDirectory(source, name, dir)
+			if openErr != nil {
+				return openErr
+			}
+			defer func() { _ = childSource.Close() }()
+			childDest := dest
+			if dest != nil && baseline == nil && name != "." {
+				if err = dest.Mkdir(name, 0o700); err != nil {
+					break
+				}
+				childDest, err = dest.OpenRoot(name + "/.")
+				if err != nil {
+					break
+				}
+				defer func() { _ = childDest.Close() }()
 			}
 			// Record before descending, so the entry bound includes directories.
-			entries[name] = entry
+			entries[path] = entry
 			for err == nil {
 				children, readErr := dir.ReadDir(128)
 				for _, child := range children {
 					if err != nil {
 						break
 					}
-					err = walk(filepath.Join(name, child.Name()))
+					err = walk(childSource, childDest, child.Name(), filepath.Join(path, child.Name()))
 				}
 				if readErr != nil {
 					if !errors.Is(readErr, io.EOF) {
@@ -110,8 +144,7 @@ func snapshotTree(ctx context.Context, source *os.Root, destination string) (map
 					break
 				}
 			}
-			_ = dir.Close()
-			if err == nil && dest != nil && name != "." {
+			if err == nil && dest != nil && baseline == nil && name != "." {
 				err = dest.Chmod(name, info.Mode().Perm())
 			}
 		case info.Mode().IsRegular():
@@ -133,7 +166,7 @@ func snapshotTree(ctx context.Context, source *os.Root, destination string) (map
 				entry.mode = opened.Mode().Perm()
 				entry.modified = opened.ModTime().UnixNano()
 				var output *os.File
-				if dest != nil {
+				if dest != nil && baseline == nil {
 					output, err = dest.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 				}
 				if err == nil {
@@ -143,17 +176,40 @@ func snapshotTree(ctx context.Context, source *os.Root, destination string) (map
 						writer = io.MultiWriter(hash, output)
 					}
 					var size int64
-					size, err = io.Copy(writer, sandboxReader{ctx, io.LimitReader(file, remaining+1)})
+					size, err = io.CopyBuffer(writer, sandboxReader{ctx, io.LimitReader(file, remaining+1)}, buffer)
 					remaining -= size
 					if remaining < 0 {
 						err = errors.New("sandbox tree exceeds 8 GiB")
 					}
 					copy(entry.hash[:], hash.Sum(nil))
+					if err == nil && dest != nil && baseline != nil && baseline[path] != entry {
+						// Re-read the same FD into a trusted, fresh inode. A late
+						// writer cannot alter captured bytes or make us publish
+						// a payload different from the manifest we compared.
+						if _, err = file.Seek(0, io.SeekStart); err == nil {
+							err = dest.MkdirAll(filepath.Dir(path), 0o700)
+						}
+						if err == nil {
+							output, err = dest.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+						}
+						if err == nil {
+							hash.Reset()
+							var copied int64
+							copied, err = io.CopyBuffer(io.MultiWriter(hash, output), sandboxReader{ctx, io.LimitReader(file, size+1)}, buffer)
+							if err == nil && (copied != size || string(hash.Sum(nil)) != string(entry.hash[:])) {
+								err = fmt.Errorf("file changed during capture: %s", path)
+							}
+						}
+					}
 				}
 				if output != nil {
 					err = errors.Join(err, output.Chmod(entry.mode), output.Close())
 					if err == nil {
-						err = dest.Chtimes(name, opened.ModTime(), opened.ModTime())
+						outputName := name
+						if baseline != nil {
+							outputName = path
+						}
+						err = dest.Chtimes(outputName, opened.ModTime(), opened.ModTime())
 					}
 				}
 			}
@@ -164,10 +220,10 @@ func snapshotTree(ctx context.Context, source *os.Root, destination string) (map
 		if err != nil {
 			return fmt.Errorf("%s: %w", name, err)
 		}
-		entries[name] = entry
+		entries[path] = entry
 		return nil
 	}
-	if err := walk("."); err != nil {
+	if err := walk(source, dest, ".", "."); err != nil {
 		return nil, err
 	}
 	return entries, nil
@@ -198,7 +254,7 @@ func (s *sandboxRun) Publish(ctx context.Context) error {
 			return err
 		}
 		path := filepath.Join(s.temp, fmt.Sprintf("capture-%d", i))
-		after, err := snapshotTree(ctx, execution, path)
+		after, err := snapshotTree(ctx, execution, path, tree.before)
 		_ = execution.Close()
 		if err != nil {
 			return fmt.Errorf("capture failed; command changes discarded: %w", err)
@@ -209,10 +265,6 @@ func (s *sandboxRun) Publish(ctx context.Context) error {
 		}
 		plan := &sandboxChanges{tree: tree, captured: captured, after: after}
 		plans = append(plans, plan)
-		plan.live, err = snapshotTree(ctx, tree.host, "")
-		if err != nil {
-			return fmt.Errorf("publication preflight failed; command changes discarded: %w", err)
-		}
 		for name, entry := range after {
 			if name != "." && tree.before[name] != entry {
 				plan.names = append(plan.names, name)
@@ -222,6 +274,13 @@ func (s *sandboxRun) Publish(ctx context.Context) error {
 			if _, exists := after[name]; !exists && name != "." {
 				plan.names = append(plan.names, name)
 			}
+		}
+		if len(plan.names) == 0 {
+			continue // No writes proposed: leave host files and concurrent edits alone.
+		}
+		plan.live, err = snapshotTree(ctx, tree.host, "", nil)
+		if err != nil {
+			return fmt.Errorf("publication preflight failed; command changes discarded: %w", err)
 		}
 		for _, name := range plan.names {
 			for ancestor := name; ancestor != "."; ancestor = filepath.Dir(ancestor) {

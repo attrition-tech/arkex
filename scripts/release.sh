@@ -53,7 +53,7 @@ case "$mode" in
         --commit "$(git rev-parse HEAD)" --limit 1 --json conclusion --jq '.[0].conclusion // "missing"')
       [ "$result" = success ] || { echo "error: native GitHub CI for HEAD must pass before publishing (state: $result)" >&2; exit 1; }
     fi
-    go test ./... >/dev/null
+    go test ./...
     goreleaser release --clean --parallelism 1
     echo
     echo "published $tag → $ARKEX_DOWNLOAD_BASE"

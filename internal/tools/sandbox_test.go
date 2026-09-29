@@ -101,7 +101,14 @@ func TestSandboxRealWriteBoundary(t *testing.T) {
 
 func TestSandboxBlocksHostUnixSocket(t *testing.T) {
 	root := t.TempDir()
-	path := filepath.Join(t.TempDir(), "host.sock")
+	// macOS's long per-user TMPDIR plus a test name can exceed sun_path.
+	// Keep the real outside listener's path short; do not skip the IPC probe.
+	dir, err := os.MkdirTemp("/tmp", "arkex-ipc-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "host.sock")
 	listener, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatal(err)

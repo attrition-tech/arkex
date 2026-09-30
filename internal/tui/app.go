@@ -239,6 +239,8 @@ type model struct {
 	blocks         []*block
 	running        bool
 	compacting     bool
+	compactStarted time.Time
+	compactStage   string
 	paused         bool // the last run paused (stuck or step-capped); enter or /continue resumes it
 	cancel         context.CancelFunc
 	runDone        chan struct{}
@@ -419,6 +421,10 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 			}
 		}
 		return m.handleMouse(msg)
+
+	case *storeContextMsg:
+		m.storeContext(msg)
+		return m, nil
 
 	case approvalMsg:
 		m.disarmConfirmation()
@@ -931,6 +937,12 @@ func (m *model) prepareAgent() error {
 	}
 	ag := m.sess.Agent
 	ag.System = m.baseSystem
+	ag.StoreContext = contextStore(m.send)
+	m.conv.Model = m.sess.Name
+	if ag.Model != nil {
+		level := ag.Model.Ref.Thinking
+		m.conv.Effort = &level
+	}
 	if m.o.Prepare != nil {
 		return m.o.Prepare(ag, m.conv.ID)
 	}
@@ -1075,16 +1087,24 @@ func (m *model) applyEvent(e agent.Event) {
 		m.lastInput = agent.ContextInput(e.Usage)
 	case agent.Compacting:
 		m.compacting = e.Active
+		if e.Active {
+			m.compactStarted = time.Now()
+			m.compactStage = "preparing history"
+		} else {
+			m.usageIn += e.Usage.InputTokens
+			m.usageOut += e.Usage.OutputTokens
+		}
+	case agent.CompactProgress:
+		m.compactStage = e.Stage
+		if e.Part > 0 {
+			m.compactStage += fmt.Sprintf(" · request %d", e.Part)
+		}
 	case agent.Compacted:
-		m.usageIn += e.Usage.InputTokens
-		m.usageOut += e.Usage.OutputTokens
 		m.lastInput = 0
 		m.blocks = append(m.blocks, compactBlock(e.Summary, e.Dropped))
 		if e.Trimmed > 0 {
 			m.appendSystem(fmt.Sprintf("the %d oldest messages no longer fit and were dropped unsummarised", e.Trimmed))
 		}
-	case agent.CompactFailed:
-		m.appendSystem("compaction failed, trying the request anyway: " + e.Err.Error())
 	case agent.ContextWindowLearned:
 		m.learnedContextWindow(e.Tokens)
 	case agent.RunEnd:

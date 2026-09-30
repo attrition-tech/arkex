@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"charm.land/fantasy"
 	"github.com/charmbracelet/fang"
 	"github.com/spf13/cobra"
 
@@ -252,6 +253,17 @@ func runRoot(ctx context.Context, f rootFlags, args []string) error {
 		}
 		if err := prepare(ag, id); err != nil {
 			return err
+		}
+		// One-shot runs create a recoverable session only if compaction needs
+		// to replace history. Resumed sessions use the same durable boundary.
+		ag.StoreContext = func(ctx context.Context, msgs []fantasy.Message) (string, error) {
+			if conv == nil {
+				conv = session.New(cwd)
+			}
+			conv.Model = displayName(ref)
+			level := ag.Model.Ref.Thinking
+			conv.Effort = &level
+			return conv.SaveContext(ctx, msgs)
 		}
 		if f.json {
 			err = modes.JSON(ctx, ag, promptText, os.Stdout)

@@ -4,13 +4,61 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/fantasy"
 
 	"github.com/attrition-tech/arkex/internal/agent"
 	"github.com/attrition-tech/arkex/internal/config"
 )
+
+// The UI owns the session. A worker must receive a durable acknowledgement
+// before replacing context. The lock resolves cancellation racing a save.
+type storeContextMsg struct {
+	ctx      context.Context
+	messages []fantasy.Message
+	done     chan struct{}
+	mu       sync.Mutex
+	finished bool
+	path     string
+	err      error
+}
+
+func contextStore(send func(tea.Msg)) func(context.Context, []fantasy.Message) (string, error) {
+	return func(ctx context.Context, messages []fantasy.Message) (string, error) {
+		if send == nil {
+			return "", errors.New("session event loop is unavailable")
+		}
+		msg := &storeContextMsg{ctx: ctx, messages: messages, done: make(chan struct{})}
+		send(msg)
+		select {
+		case <-msg.done:
+		case <-ctx.Done():
+		}
+		msg.mu.Lock()
+		defer msg.mu.Unlock()
+		if !msg.finished {
+			return "", ctx.Err()
+		}
+		return msg.path, msg.err
+	}
+}
+
+func (m *model) storeContext(msg *storeContextMsg) {
+	msg.mu.Lock()
+	defer msg.mu.Unlock()
+	defer close(msg.done)
+	if err := msg.ctx.Err(); err != nil {
+		msg.err = err
+	} else if m.conv == nil {
+		msg.err = errors.New("session is unavailable")
+	} else {
+		msg.path, msg.err = m.conv.SaveContext(msg.ctx, msg.messages)
+	}
+	msg.finished = true
+}
 
 // compact is the manual /compact: it summarises the whole conversation in
 // the background. The agent also compacts on its own inside a run when the
@@ -37,6 +85,8 @@ func (m *model) compact() tea.Cmd {
 	m.disarmConfirmation()
 	m.running = true
 	m.compacting = true
+	m.compactStarted = time.Now()
+	m.compactStage = "preparing history"
 	m.startedAt = time.Now()
 	m.requestTimings, m.runDuration = nil, 0
 	m.runGen++
@@ -48,11 +98,14 @@ func (m *model) compact() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
 	ag := m.sess.Agent
+	send := m.send
 	done := make(chan struct{})
 	m.runDone = done
 	return tea.Batch(func() tea.Msg {
 		defer close(done)
-		res, err := ag.Compact(ctx)
+		co := newCoalescer(send)
+		res, err := ag.CompactWithProgress(ctx, co.push)
+		co.flush()
 		return compactDoneMsg{res: res, err: err}
 	}, m.workingTick())
 }
@@ -69,17 +122,9 @@ func (m *model) compactDone(msg compactDoneMsg) tea.Cmd {
 	case errors.Is(msg.err, context.Canceled):
 		m.appendSystem("compaction cancelled")
 	case msg.err != nil:
-		m.appendSystem("compaction failed: " + msg.err.Error())
-	default:
-		m.lastInput = 0 // unknown until the next request
-		m.usageIn += msg.res.Usage.InputTokens
-		m.usageOut += msg.res.Usage.OutputTokens
-		m.blocks = append(m.blocks, compactBlock(msg.res.Summary, msg.res.Dropped))
-		if msg.res.Trimmed > 0 {
-			m.appendSystem(fmt.Sprintf("the %d oldest messages no longer fit and were dropped unsummarised", msg.res.Trimmed))
-		}
-		m.saveConv()
+		m.appendSystem("compaction failed; original context preserved: " + msg.err.Error())
 	}
+	m.saveConv()
 	m.refresh()
 	return m.finishPromptAction()
 }

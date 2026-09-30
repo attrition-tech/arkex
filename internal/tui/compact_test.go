@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,11 +15,13 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/fantasy"
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/attrition-tech/arkex/internal/agent"
 	"github.com/attrition-tech/arkex/internal/config"
 	"github.com/attrition-tech/arkex/internal/provider"
+	"github.com/attrition-tech/arkex/internal/session"
 	"github.com/attrition-tech/arkex/internal/tools"
 )
 
@@ -118,7 +121,14 @@ func fakeAgentModel(t *testing.T, lm *fakeLM, contextWindow int) *harness {
 	m, _ := testModel(t)
 	h := &harness{model: m}
 	m.o.Connect = nil
-	m.send = func(msg tea.Msg) { h.queued = append(h.queued, msg) }
+	m.send = func(msg tea.Msg) {
+		// A persistence acknowledgement is synchronous, unlike display events.
+		if request, ok := msg.(*storeContextMsg); ok {
+			m.storeContext(request)
+			return
+		}
+		h.queued = append(h.queued, msg)
+	}
 	ag := &agent.Agent{Model: lmodel, Tools: tools.Default(m.o.Cwd), Policy: agent.AllowAll{}, System: "test"}
 	m.setSession(Connection{Agent: ag, Name: "fake/m"})
 	return h
@@ -167,18 +177,41 @@ func TestStuckRunPausesThenEnterContinues(t *testing.T) {
 	}
 }
 
+func TestCompactionBoundarySavesCurrentReasoningSetting(t *testing.T) {
+	m := fakeAgentModel(t, &fakeLM{}, 10000)
+	if err := m.prepareAgent(); err != nil {
+		t.Fatal(err)
+	}
+	old := "high"
+	m.conv.Effort = &old
+	m.sess.Agent.Model.Ref.Thinking = "low"
+	if err := m.prepareAgent(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.sess.Agent.StoreContext(t.Context(), []fantasy.Message{fantasy.NewUserMessage("work")}); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := session.Load(m.o.Cwd, m.conv.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Effort == nil || *saved.Effort != "low" {
+		t.Fatalf("compaction saved stale reasoning setting: %v", saved.Effort)
+	}
+}
+
 func TestAutoCompactBeforePromptWhenContextIsNearlyFull(t *testing.T) {
 	lm := &fakeLM{script: []string{
-		streamText("first answer", 850), // 85% of a 1000-token window
-		jsonReply("Summary: the user said hi."),
+		streamText("first answer", 8500), // 85% of a 10000-token window
+		streamText("Summary: the user said hi.", 50),
 		streamText("second answer", 40),
 	}}
-	m := fakeAgentModel(t, lm, 1000)
+	m := fakeAgentModel(t, lm, 10000)
 
 	m.setInput("hi")
 	_, cmd := m.Update(key("enter"))
 	m.drive(cmd)
-	if m.lastInput != 850 || m.sess.Agent.LastInput() != 850 {
+	if m.lastInput != 8500 || m.sess.Agent.LastInput() != 8500 {
 		t.Fatalf("lastInput=%d agent=%d", m.lastInput, m.sess.Agent.LastInput())
 	}
 	if f := ansi.Strip(m.footer()); !strings.Contains(f, "85%") {
@@ -198,7 +231,7 @@ func TestAutoCompactBeforePromptWhenContextIsNearlyFull(t *testing.T) {
 	}
 	foundSummary := false
 	for _, b := range m.blocks {
-		if b.name == "context compacted · 2 messages summarised" && b.text.String() == "Summary: the user said hi." {
+		if b.name == "context compacted · 2 messages summarised" && strings.HasPrefix(b.text.String(), "Summary: the user said hi.") {
 			foundSummary = true
 		}
 	}
@@ -230,15 +263,15 @@ func TestGatewayUsageSurvivesStatsAndCompacts(t *testing.T) {
 		cached         bool
 	}{
 		{"gateway-fallback", 0, 354624, false},
-		{"cached-context", 1000, 850, true},
+		{"cached-context", 10000, 8500, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			response := streamText("first answer", tc.tokens)
 			if tc.cached {
-				response = strings.ReplaceAll(response, `"prompt_tokens":850`, `"prompt_tokens":850,"prompt_tokens_details":{"cached_tokens":800}`)
+				response = strings.ReplaceAll(response, `"prompt_tokens":8500`, `"prompt_tokens":8500,"prompt_tokens_details":{"cached_tokens":8450}`)
 			}
 			response = strings.ReplaceAll(response, "data: [DONE]", "data: {\"choices\":[],\"usage\":{\"completion_tokens\":7,\"output_tokens\":7,\"throughput\":2.55,\"total_time\":3.17,\"ttft\":0.43}}\n\ndata: [DONE]")
-			lm := &fakeLM{script: []string{response, jsonReply("Summary: user said hi."), streamText("second answer", 40)}}
+			lm := &fakeLM{script: []string{response, streamText("Summary: user said hi.", 50), streamText("second answer", 40)}}
 			m := fakeAgentModel(t, lm, tc.window)
 			m.setInput("hi")
 			_, cmd := m.Update(key("enter"))
@@ -263,7 +296,7 @@ func TestGatewayUsageSurvivesStatsAndCompacts(t *testing.T) {
 }
 
 func TestManualCompactCommand(t *testing.T) {
-	lm := &fakeLM{script: []string{streamText("ok", 10), jsonReply("S")}}
+	lm := &fakeLM{script: []string{streamText("ok", 10), streamText("S", 50)}}
 	m := fakeAgentModel(t, lm, 0)
 	m.command("/compact")
 	if !strings.Contains(transcript(m.model), "nothing to compact yet") {
@@ -279,5 +312,61 @@ func TestManualCompactCommand(t *testing.T) {
 	m.drive(cmd)
 	if m.compacting || len(lm.requests) != 2 || !strings.Contains(transcript(m.model), "context compacted") {
 		t.Fatalf("requests=%d\n%s", len(lm.requests), transcript(m.model))
+	}
+}
+
+func TestContextStoreCancellationAcknowledgesCommittedState(t *testing.T) {
+	for _, committed := range []bool{false, true} {
+		t.Run(fmt.Sprint(committed), func(t *testing.T) {
+			t.Setenv("ARKEX_HOME", t.TempDir())
+			m, _ := testModel(t)
+			m.conv = session.New(t.TempDir())
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var pending *storeContextMsg
+			store := contextStore(func(msg tea.Msg) {
+				pending = msg.(*storeContextMsg)
+				if committed {
+					m.storeContext(pending)
+				}
+				cancel()
+			})
+			path, err := store(ctx, []fantasy.Message{fantasy.NewUserMessage("boundary")})
+			if committed {
+				if err != nil || path == "" {
+					t.Fatal("lost durable acknowledgement", err)
+				}
+			} else {
+				if !errors.Is(err, context.Canceled) {
+					t.Fatal(err)
+				}
+				m.storeContext(pending) // queued event arrives after cancellation
+				if len(m.conv.Messages) != 0 {
+					t.Fatal("late event committed canceled context")
+				}
+			}
+		})
+	}
+}
+
+func TestCompactionReasoningSettingsDoNotChangeNormalRequests(t *testing.T) {
+	lm := &fakeLM{script: []string{streamText("before", 50), streamText("summary", 100), streamText("after", 60)}}
+	m := fakeAgentModel(t, lm, 32768)
+	ag := m.sess.Agent
+	ag.Model.Ref.Conn.Compat.Thinking = config.ThinkingDeepSeek
+	if err := ag.Model.SetThinking("on"); err != nil {
+		t.Fatal(err)
+	}
+	sendEditTest(m, "first request")
+	m.drive(m.compact())
+	sendEditTest(m, "second request")
+	for i, want := range []string{"enabled", "disabled", "enabled"} {
+		body, _ := json.Marshal(lm.requests[i]["thinking"])
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("request %d thinking=%s", i, body)
+		}
+	}
+	if ag.Model.Ref.Thinking != "on" {
+		t.Fatal("summary changed the user's reasoning preference")
 	}
 }

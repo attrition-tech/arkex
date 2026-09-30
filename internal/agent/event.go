@@ -75,7 +75,14 @@ type TurnEnd struct {
 
 // Compacting brackets automatic compaction, including failed/cancelled attempts.
 type Compacting struct {
-	Active bool `json:"active"`
+	Active bool          `json:"active"`
+	Usage  fantasy.Usage `json:"usage"` // final usage, including unsuccessful attempts
+}
+
+// CompactProgress reports observed phases, never an invented percentage.
+type CompactProgress struct {
+	Stage string `json:"stage"`
+	Part  int    `json:"part,omitempty"`
 }
 
 // Compacted fires when the agent summarised the conversation on its own:
@@ -89,8 +96,7 @@ type Compacted struct {
 	Usage   fantasy.Usage `json:"usage"`
 }
 
-// CompactFailed fires when a pre-request compaction did not go through;
-// the run continues, since the request may still fit.
+// CompactFailed fires when pre-request compaction stops the run safely.
 type CompactFailed struct {
 	Err error `json:"-"`
 }
@@ -120,6 +126,7 @@ func (ToolResult) isEvent()           {}
 func (TurnEnd) isEvent()              {}
 func (Compacted) isEvent()            {}
 func (Compacting) isEvent()           {}
+func (CompactProgress) isEvent()      {}
 func (CompactFailed) isEvent()        {}
 func (ContextWindowLearned) isEvent() {}
 func (RunEnd) isEvent()               {}

@@ -11,7 +11,8 @@ Behaviour is keyed off the last user message:
   contains "markdown"      -> streams a markdown sample (heading, list, code, table)
   contains "overflow"      -> rejects the request as too long (window 262144) until the
                               conversation has been compacted, then answers
-  non-streaming request    -> a JSON completion holding a fake hand-off summary
+  compaction request      -> a streamed fake hand-off summary
+  non-streaming request    -> a JSON completion (session titles)
   otherwise, first turn    -> reasoning + text + a `read go.mod` tool call
   otherwise, after a tool  -> a short markdown answer
 """
@@ -102,10 +103,12 @@ class Handler(BaseHTTPRequestHandler):
         tool_msgs = [m for m in msgs if m.get("role") == "tool"]
         last_user = str([m for m in msgs if m.get("role") == "user"][-1]["content"]).lower()
         compacted = any("summary of the conversation so far" in str(m.get("content", "")).lower() for m in msgs)
+        summarizing = any("Write an updated hand-off summary" in str(m.get("content", ""))
+                          for m in msgs if m.get("role") == "system")
         delay = 0.02
 
         if not body.get("stream"):
-            # Compaction and opt-in session titles use non-streaming completions.
+            # Opt-in session titles use non-streaming completions.
             title_request = any("Suggest a short descriptive session title" in str(m.get("content", ""))
                                 for m in msgs if m.get("role") == "system")
             content = "Improve deployment checks" if title_request else f"The user sent {len(msgs)} messages; the last one asked: {last_user[:60]!r}."
@@ -116,13 +119,15 @@ class Handler(BaseHTTPRequestHandler):
                      "usage": {"prompt_tokens": 1200, "completion_tokens": 30, "total_tokens": 1230}}
             self.send_json(200, reply)
             return
-        if "overflow" in last_user and not compacted:
+        if "overflow" in last_user and not compacted and not summarizing:
             self.send_json(400, {"error": {
                 "message": "This model's maximum context length is 262144 tokens. However, your messages resulted in 245761 tokens. Please reduce the length of the messages.",
                 "type": "invalid_request_error", "param": "messages", "code": "context_length_exceeded"}})
             return
 
-        if last_user.startswith("network-test "):
+        if summarizing:
+            parts = [chunk({"content": "The user requested local work; preserve constraints and verify pending changes."}), chunk({}, "stop")]
+        elif last_user.startswith("network-test "):
             # Local deterministic fault injection, used by network_e2e.py.
             mode, key = last_user.split()[1:3]
             state = self.network_tests.setdefault(key, {"requests": 0})

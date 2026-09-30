@@ -141,6 +141,35 @@ Choose **Remove from here…** from a sent prompt's menu (or press Delete while
 it is selected) to create a branch without that prompt and everything after it.
 Confirmation is required; the original conversation and file changes remain.
 
+### Context compaction
+
+Arkex compacts automatically near the context limit; `/compact` requests it
+manually. `ctx*` means the model's limit is assumed, not confirmed. The trigger
+estimates the upcoming request, including instructions, tool definitions, new
+messages and output headroom. Token estimates are not exact.
+
+Compaction saves the original context first, summarizes older text in bounded
+chronological chunks, and retains a bounded recent suffix plus the fresh user
+prompt. Tool calls and their results stay together. Attachments remain attached
+verbatim rather than being converted to base64 text for summarization.
+The handoff includes a readable original-history reference so the agent can
+recover omitted details; summaries themselves are not guaranteed lossless.
+
+The footer shows the observed phase, request number and elapsed time. Each
+summary request has a 90-second deadline; the whole operation has a five-minute
+deadline and a 32-request cap, including at most one smaller-chunk overflow
+retry. Esc twice cancels. Incomplete, oversized or unusable summaries and failed
+saves leave the original context active. An automatic failure stops the run
+instead of silently sending the oversized request again. Retry `/compact` or
+switch models after addressing the reported error.
+
+Private history snapshots live under the workspace's session directory in
+`context-history/<session-id>/`. Their references survive resume and repeated
+compaction. Snapshots are retained separately, including after deleting a
+session file, because edited branches can still refer to them. One-shot print
+runs normally remain unsaved, but create a recoverable session if compaction
+is needed. Recovery through tools still respects configured read permissions.
+
 ## Build from source
 
 Use the Go version in [go.mod](go.mod):

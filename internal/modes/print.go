@@ -57,6 +57,15 @@ func Print(ctx context.Context, ag Runner, prompt string, out, errOut io.Writer)
 			} else if e.Summary != "" {
 				write(fmt.Fprintf(errOut, "  ✓ %s (%s)\n", sanitize.Terminal(e.Summary), e.Duration))
 			}
+		case agent.CompactProgress:
+			breakLine()
+			label := e.Stage
+			if e.Part > 0 {
+				label += fmt.Sprintf("; request %d", e.Part)
+			}
+			write(fmt.Fprintf(errOut, "[compacting: %s]\n", label))
+		case agent.Compacted:
+			write(fmt.Fprintf(errOut, "[context compacted: %d messages; original history retained]\n", e.Dropped))
 		case agent.RunEnd:
 			if wroteText && !atLineStart {
 				write(fmt.Fprintln(out))
@@ -80,6 +89,9 @@ func JSON(ctx context.Context, ag Runner, prompt string, out io.Writer) error {
 		env := map[string]any{"type": eventName(e), "data": e}
 		if re, ok := e.(agent.RunEnd); ok && re.Err != nil {
 			env["data"] = map[string]any{"steps": re.Steps, "usage": re.Usage, "error": re.Err.Error()}
+		}
+		if ce, ok := e.(agent.CompactFailed); ok && ce.Err != nil {
+			env["data"] = map[string]any{"error": ce.Err.Error()}
 		}
 		_ = enc.Encode(env)
 	})
@@ -115,6 +127,14 @@ func eventName(e agent.Event) string {
 		return "turn_end"
 	case agent.Compacting:
 		return "compacting"
+	case agent.CompactProgress:
+		return "compact_progress"
+	case agent.Compacted:
+		return "compacted"
+	case agent.CompactFailed:
+		return "compact_failed"
+	case agent.ContextWindowLearned:
+		return "context_window_learned"
 	case agent.RunEnd:
 		return "run_end"
 	}

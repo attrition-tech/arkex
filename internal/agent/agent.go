@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"charm.land/fantasy"
@@ -21,6 +22,10 @@ type Agent struct {
 	Tools  *tools.Registry
 	Policy Policy
 	System string
+	// StoreContext durably saves a context boundary and returns the readable
+	// session history path. Compaction requires this hook and waits for it.
+	// A nil error commits the boundary, even if cancellation races the save.
+	StoreContext func(context.Context, []fantasy.Message) (string, error)
 	// Retry asks before restarting partial output or after automatic retries.
 	// Nil returns the error (noninteractive consumers never wait for input).
 	Retry func(context.Context, error, bool) bool
@@ -33,8 +38,10 @@ type Agent struct {
 	messages []fantasy.Message
 	// lastInput is the input token count the most recent request reported;
 	// see compact.go for how it drives compaction.
-	lastInput int64
-	lastUsage fantasy.Usage
+	lastInput        int64
+	lastPromptTokens int // local estimate of the last measured request
+	lastUsage        fantasy.Usage
+	contextOverride  atomic.Pointer[int] // learned window; safe for live UI reads
 }
 
 // LastUsage is the usage reported by the most recent run, including failed runs.
@@ -115,11 +122,13 @@ func (a *Agent) loop(ctx context.Context, emit func(Event), keepOnFirst int) err
 		}
 		if a.needsCompact() {
 			w := a.ContextWindow()
-			reason := fmt.Sprintf("the last request used %d%% of the %s-token context window", a.lastInput*100/int64(w), formatTokens(w))
-			if _, err := a.autoCompact(ctx, emit, keep, reason); err != nil {
-				// Not fatal: the request may still fit. If it does not, the
-				// overflow path below gets another go.
+			reason := fmt.Sprintf("the upcoming request needs approximately %d input tokens plus output headroom in the %s-token context window", a.projectedInput(), formatTokens(w))
+			res, err := a.autoCompact(ctx, emit, keep, reason)
+			total = addUsage(total, res.Usage)
+			if err != nil {
 				emit(CompactFailed{Err: err})
+				runErr = fmt.Errorf("compaction stopped; original context preserved: %w", err)
+				break
 			}
 		}
 		emit(TurnStart{Step: steps})
@@ -133,11 +142,13 @@ func (a *Agent) loop(ctx context.Context, emit func(Event), keepOnFirst int) err
 					a.SetContextWindow(w)
 					emit(ContextWindowLearned{Tokens: w})
 				}
-				if _, cerr := a.autoCompact(ctx, emit, keep, "the request exceeded the model's context window"); cerr == nil {
+				res, cerr := a.autoCompact(ctx, emit, keep, "the request exceeded the model's context window")
+				total = addUsage(total, res.Usage)
+				if cerr == nil {
 					steps--
 					continue
 				} else {
-					err = fmt.Errorf("%w (compacting to recover failed: %v)", err, cerr)
+					err = fmt.Errorf("%w (compacting to recover failed: %w)", err, cerr)
 				}
 			}
 			runErr = err
@@ -210,6 +221,7 @@ func (a *Agent) stream(ctx context.Context, emit func(Event)) (turnResult, error
 		tls = a.Tools.Fantasy()
 	}
 	call := a.Model.Call(a.prompt(), tls)
+	a.lastPromptTokens = a.requestTokens(a.messages)
 	timing.Prepare = time.Since(start)
 	seq, err := a.Model.LM.Stream(ctx, call)
 	if err != nil {

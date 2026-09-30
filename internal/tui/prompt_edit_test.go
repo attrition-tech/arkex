@@ -23,7 +23,7 @@ func sendEditTest(h *harness, text string) {
 
 func TestEditResendActualRequestAfterCompactionAndResume(t *testing.T) {
 	lm := &fakeLM{script: []string{streamText("prior-answer", 20), streamText("discard-answer", 20),
-		streamText("later-answer", 20), jsonReply("summary includes discard-target and later-prompt"), streamText("revised-answer", 20)}}
+		streamText("later-answer", 20), streamText("summary includes discard-target and later-prompt", 50), streamText("revised-answer", 20)}}
 	h := fakeAgentModel(t, lm, 100000)
 	sendEditTest(h, "prior-prompt")
 	image := []byte{1, 3, 5, 7}
@@ -217,7 +217,7 @@ func TestLegacyRepeatedPromptsMapToDistinctCheckpoints(t *testing.T) {
 
 func TestRemovePromptAfterCompactionAndResume(t *testing.T) {
 	lm := &fakeLM{script: []string{streamText("keep answer", 20), streamText("discard answer", 20),
-		streamText("later answer", 20), jsonReply("summary containing discard prompt"), streamText("new answer", 20)}}
+		streamText("later answer", 20), streamText("summary containing discard prompt", 50), streamText("new answer", 20)}}
 	h := fakeAgentModel(t, lm, 100000)
 	sendEditTest(h, "keep prompt")
 	sendEditTest(h, "discard prompt")

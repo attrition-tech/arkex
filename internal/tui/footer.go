@@ -107,6 +107,9 @@ func (m *model) footer() string {
 	}
 	if m.compacting {
 		key.compactFrame = m.frame % 8
+		if key.status == "" {
+			key.status = fmt.Sprintf("Compacting · %s · %s · esc twice cancels", m.compactStage, time.Since(m.compactStarted).Round(time.Second))
+		}
 	}
 	if m.panel != nil {
 		key.panel = m.panelBottom()

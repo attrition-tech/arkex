@@ -14,11 +14,19 @@ import (
 // Lock serializes cooperating writers until unlock is called. The sidecar must
 // remain in place after unlocking; removing it could split competing locks.
 func Lock(path string) (unlock func(), err error) {
+	return LockContext(context.Background(), path)
+}
+
+// LockContext also observes the caller's cancellation while waiting for a writer.
+func LockContext(ctx context.Context, path string) (unlock func(), err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, err
 	}
 	l := flock.New(path+".lock", flock.SetPermissions(0o600))
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	ok, err := l.TryLockContext(ctx, 10*time.Millisecond)
 	if err != nil || !ok {

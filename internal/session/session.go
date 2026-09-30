@@ -6,6 +6,7 @@
 package session
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -101,6 +102,43 @@ func (s *Session) Update(msgs []fantasy.Message, usage Usage) {
 	}
 }
 
+// SaveContext persists a context boundary before the agent adopts it. History
+// retains the original messages, including tool results from the current run.
+// Failure leaves both the session object and the previous disk state intact.
+func (s *Session) SaveContext(ctx context.Context, msgs []fantasy.Message) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	dir, err := Dir(s.Cwd)
+	if err != nil {
+		return "", err
+	}
+	next := *s
+	next.History = append([]fantasy.Message(nil), s.History...)
+	next.Update(msgs, Usage{Model: s.Model, Input: s.UsageIn, Output: s.UsageOut})
+	next.LastInput = 0
+	// Immutable snapshots keep recovery references stable across later turns,
+	// compactions and edited branches. They cannot expose future messages.
+	data, err := json.MarshalIndent(msgs, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	hash := sha256.Sum256(data)
+	archiveDir := filepath.Join(dir, "context-history", s.ID)
+	if err := os.MkdirAll(archiveDir, 0o700); err != nil {
+		return "", err
+	}
+	archive := filepath.Join(archiveDir, hex.EncodeToString(hash[:])+".json")
+	if err := fileutil.Write(archive, data); err != nil {
+		return "", err
+	}
+	if err := next.save(ctx); err != nil {
+		return "", err
+	}
+	*s = next
+	return archive, nil
+}
+
 // TitleFor derives a title from the first line of the first user message.
 func TitleFor(msgs []fantasy.Message) string {
 	for _, m := range msgs {
@@ -141,6 +179,10 @@ var ErrConflict = errors.New("session changed in another process; disk left unch
 // Save writes the session atomically. Empty branches are intentional and saved;
 // simply opening arkex and quitting still leaves nothing behind.
 func (s *Session) Save() error {
+	return s.save(context.Background())
+}
+
+func (s *Session) save(ctx context.Context) error {
 	if len(s.Messages) == 0 && s.ParentID == "" {
 		return nil
 	}
@@ -151,7 +193,7 @@ func (s *Session) Save() error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
-	unlock, err := fileutil.Lock(s.path(dir))
+	unlock, err := fileutil.LockContext(ctx, s.path(dir))
 	if err != nil {
 		return err
 	}
@@ -174,6 +216,9 @@ func (s *Session) Save() error {
 	}
 	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := fileutil.Write(s.path(dir), b); err != nil {

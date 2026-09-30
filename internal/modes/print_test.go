@@ -171,3 +171,30 @@ func TestPrintReportsOutputFailure(t *testing.T) {
 		}
 	}
 }
+
+func TestCompactionEventsReachNoninteractiveConsumers(t *testing.T) {
+	r := &scripted{events: []agent.Event{
+		agent.Compacting{Active: true}, agent.CompactProgress{Stage: "waiting for model", Part: 2},
+		agent.Compacted{Summary: "S", Dropped: 7}, agent.ContextWindowLearned{Tokens: 8192},
+		agent.CompactFailed{Err: errors.New("summary incomplete")}, agent.Compacting{Active: false},
+	}}
+	var out, diagnostic bytes.Buffer
+	if err := JSON(t.Context(), r, "test", &out); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"type":"compacting"`, `"type":"compact_progress"`, `"type":"compacted"`, `"type":"context_window_learned"`, `"error":"summary incomplete"`} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("missing %s: %s", want, out.String())
+		}
+	}
+	if strings.Contains(out.String(), `"unknown"`) {
+		t.Fatal("unnamed compaction event")
+	}
+	out.Reset()
+	if err := Print(t.Context(), r, "test", &out, &diagnostic); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() != 0 || !strings.Contains(diagnostic.String(), "waiting for model") {
+		t.Fatal("progress mixed into stdout or lost")
+	}
+}

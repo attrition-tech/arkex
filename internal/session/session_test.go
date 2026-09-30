@@ -1,15 +1,90 @@
 package session
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	"charm.land/fantasy"
+	"github.com/attrition-tech/arkex/internal/fileutil"
 )
+
+func TestContextSaveDeadlineWhileSessionIsLocked(t *testing.T) {
+	t.Setenv("ARKEX_HOME", t.TempDir())
+	s := New(t.TempDir())
+	dir, err := Dir(s.Cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := fileutil.Lock(s.path(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	ctx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, err := s.SaveContext(ctx, []fantasy.Message{fantasy.NewUserMessage("pending")}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal(err)
+	}
+	if time.Since(start) > time.Second || len(s.Messages) != 0 {
+		t.Fatal("blocked save ignored deadline or committed")
+	}
+}
+
+func TestContextSnapshotsSurviveReplacementAndRejectStaleSave(t *testing.T) {
+	t.Setenv("ARKEX_HOME", t.TempDir())
+	s := New(t.TempDir())
+	original := []fantasy.Message{fantasy.NewUserMessage("original decision")}
+	path, err := s.SaveContext(t.Context(), original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale, err := Load(s.Cwd, s.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := []fantasy.Message{fantasy.NewUserMessage("summary")}
+	if _, err := s.SaveContext(t.Context(), replacement); err != nil {
+		t.Fatal(err)
+	}
+	if now, err := os.ReadFile(path); err != nil || string(now) != string(data) {
+		t.Fatal("recovery snapshot changed")
+	}
+	var messages []fantasy.Message
+	if err := json.Unmarshal(data, &messages); err != nil || !reflect.DeepEqual(messages, original) {
+		t.Fatal("original snapshot lost", err)
+	}
+	before := *stale
+	if _, err := stale.SaveContext(t.Context(), []fantasy.Message{fantasy.NewUserMessage("stale writer")}); !errors.Is(err, ErrConflict) {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(*stale, before) {
+		t.Fatal("failed save mutated the session")
+	}
+	loaded, err := Load(s.Cwd, s.ID)
+	if err != nil || !reflect.DeepEqual(loaded.Messages, replacement) {
+		t.Fatal("stale save changed disk", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := s.SaveContext(ctx, original); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(s.Messages, replacement) {
+		t.Fatal("cancellation replaced context")
+	}
+}
 
 func TestConcurrentSavesRejectStaleAndDeletedSessions(t *testing.T) {
 	t.Setenv("ARKEX_HOME", t.TempDir())

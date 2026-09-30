@@ -53,7 +53,7 @@ func prepareChromium(ctx context.Context, scratch, destination, arch string) (st
 	}
 	defer func() { _ = file.Close() }()
 	if err := unpackChromium(ctx, file, digest, destination); err != nil {
-		return "", fmt.Errorf("managed browser archive rejected (remove %s to download it again): %w", archive, err)
+		return "", fmt.Errorf("managed browser archive rejected (remove \"$TMPDIR/%s\" in a bash call without browser, then retry): %w", filepath.Base(archive), err)
 	}
 	return filepath.Join(destination, "chrome-headless-shell-"+platform, "chrome-headless-shell"), nil
 }
@@ -165,6 +165,13 @@ type managedBrowser struct {
 
 func (b *managedBrowser) Close() {
 	b.stop.Do(func() {
+		// CDP clients can close the browser before their shell finishes. Do not
+		// signal a long-reaped PID/process group when the tool later completes.
+		select {
+		case <-b.done:
+			return
+		default:
+		}
 		_ = b.cmd.Cancel()
 		<-b.done
 	})

@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -117,6 +118,30 @@ func TestChromiumDownloadFailureIsNotCached(t *testing.T) {
 	}
 }
 
+func TestBashBrowserFailureDoesNotRunCommand(t *testing.T) {
+	b := &Bash{Dir: t.TempDir(), TempDir: t.TempDir(), Shell: "/bin/sh"}
+	platform, _, err := chromiumArchive(runtime.GOARCH)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(b.TempDir, "arkex-chromium-"+managedChromiumVersion+"-"+platform+".zip")
+	if err := os.WriteFile(archive, []byte("bad-archive"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = runBash(t, b, map[string]any{"browser": "chromium", "command": "touch must-not-run"})
+	want := "macOS-only"
+	if runtime.GOOS == "darwin" {
+		want = "SHA-256 mismatch"
+	}
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("browser failure hidden: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(b.Dir, "must-not-run")); !os.IsNotExist(err) {
+		t.Fatal("command ran after browser failure")
+	}
+	sandboxContents(t, archive, "bad-archive")
+}
+
 func TestBrowserReadinessParsing(t *testing.T) {
 	b := &browserOutput{limitedOutput: limitedOutput{limit: 50}, ready: make(chan string, 1)}
 	for _, endpoint := range []string{"ws://example.com:123/devtools/browser/a", "ws://127.0.0.1:123/wrong", "ws://user@127.0.0.1:123/devtools/browser/a"} {
@@ -144,6 +169,25 @@ func TestBrowserReadinessParsing(t *testing.T) {
 }
 
 func TestManagedBrowserLifecycle(t *testing.T) {
+	t.Run("already exited", func(t *testing.T) {
+		reader, writer, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = reader.Close(); _ = writer.Close() }()
+		cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", `printf 'DevTools listening on ws://127.0.0.1:54321/devtools/browser/fixture\n'; read done`)
+		cmd.Stdin = reader
+		browser, err := launchManagedBrowser(t.Context(), cmd)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.WriteString("exit\n"); err != nil {
+			t.Fatal(err)
+		}
+		<-browser.done
+		cmd.Cancel = func() error { t.Error("attempted to signal a reaped browser PID"); return nil }
+		browser.Close()
+	})
 	t.Run("owned shutdown", func(t *testing.T) {
 		cmd := exec.CommandContext(t.Context(), "/bin/sh", "-c", `printf 'DevTools listening on ws://127.0.0.1:54321/devtools/browser/fixture\n'; exec sleep 60`)
 		browser, err := launchManagedBrowser(t.Context(), cmd)

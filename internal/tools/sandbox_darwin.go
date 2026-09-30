@@ -91,7 +91,9 @@ func startBrowser(ctx context.Context, run *sandboxRun, scratch string) (*manage
 	args := []string{"--headless", "--no-sandbox", "--disable-gpu", "--disable-breakpad", "--no-first-run", "--disable-background-networking", "--remote-debugging-port=0", "--user-data-dir=" + filepath.Join(data, "profile")}
 	cmd := darwinBrowserCommand(ctx, darwinBrowserProfile(trees, stock), program, args...)
 	cmd.Dir = data
-	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + data, "TMPDIR=" + data, "TMP=" + data, "TEMP=" + data}
+	// Chromium's macOS GetTempDir uses its own override, not POSIX TMPDIR.
+	// Downloads otherwise fall back to the user's unrestricted Darwin temp dir.
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + data, "TMPDIR=" + data, "TMP=" + data, "TEMP=" + data, "MAC_CHROMIUM_TMPDIR=" + data}
 	return launchManagedBrowser(ctx, cmd)
 }
 

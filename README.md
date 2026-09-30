@@ -128,9 +128,11 @@ The browser receives only its own PID-specific Mach rendezvous permission, a
 clean environment, and permission to execute only that stock distribution.
 Ordinary shell processes receive no additional IPC permissions. The verified
 browser is trusted code for its IPC behavior; this is not a security guarantee
-against vulnerabilities in Chromium itself. Browser profiles are disposable,
-and browser shutdown precedes file publication. Cancellation discards unpublished
-changes, as with other shell calls. No unrestricted-launch fallback exists.
+against vulnerabilities in Chromium itself. Chromium runs under Arkex's Seatbelt
+profile with its own nested sandbox disabled, as in Playwright's default launch.
+Browser profiles are disposable, and browser shutdown precedes file publication.
+Cancellation discards unpublished changes, as with other shell calls. No
+unrestricted-launch fallback exists.
 
 Supported host-manager operations are:
 

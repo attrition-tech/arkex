@@ -127,6 +127,13 @@ publishes a GitHub Release with generated notes and the exact same six assets
 without access to R2 or signing secrets. GitHub drafts remain drafts until all
 assets are uploaded. Completed releases are never overwritten.
 
+After creating a draft, the GitHub job checks the authenticated release list
+immediately, then up to six more times at five-second intervals if the draft is
+not visible yet. These are read-only checks; creation is never repeated within
+the job. API errors stop immediately. If all checks miss the draft, publication
+stops before asset uploads; inspect the draft and rerun only the failed GitHub
+job as described below. Existing drafts resume without this creation wait.
+
 `publish` refuses a dirty tree, an untagged HEAD, a commit outside `main`, an
 existing R2 version prefix, or a version no newer than `stable.json`. It builds
 targets one at a time (`--parallelism 1`), signs `SHA256SUMS`, and uploads versioned

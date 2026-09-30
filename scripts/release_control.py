@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 from urllib.parse import urlsplit
 
 REPO = "attrition-tech/arkex"
@@ -87,12 +88,19 @@ def github(tag, directory):
         gh("release", "create", tag, "--repo", REPO, "--verify-tag", "--draft",
            "--title", f"Arkex {tag}", "--generate-notes")
         # Get-by-tag only resolves published releases. The authenticated list
-        # includes drafts and also lets a failed upload resume on a rerun.
-        pages = json.loads(gh("api", "--paginate", "--slurp", f"repos/{REPO}/releases?per_page=100"))
-        releases = [r for page in pages for r in page]
-        release = next((r for r in releases if r["tag_name"] == tag), None)
+        # includes drafts, but a newly created one may not be visible yet.
+        # Poll only reads, for up to 30 seconds of waiting; never repeat create.
+        # API failures propagate rather than being treated as an absent draft.
+        for attempt in range(7):
+            pages = json.loads(gh("api", "--paginate", "--slurp", f"repos/{REPO}/releases?per_page=100"))
+            releases = [r for page in pages for r in page]
+            release = next((r for r in releases if r["tag_name"] == tag), None)
+            if release is not None:
+                break
+            if attempt < 6:
+                time.sleep(5)
         if release is None:
-            raise ValueError("Created draft is not visible yet; rerun the GitHub release job")
+            raise ValueError("Created draft is still not visible after waiting 30 seconds; rerun only the GitHub release job")
     existing = {a["name"] for a in release["assets"]}
     unexpected = existing - set(names)
     if unexpected:

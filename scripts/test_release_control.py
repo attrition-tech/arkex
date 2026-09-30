@@ -65,7 +65,7 @@ class ReleaseTests(unittest.TestCase):
         return ""
 
     def test_initial_publish_then_rerun_changes_nothing(self):
-        with patch.object(release, "gh", side_effect=self.fake_gh):
+        with patch.object(release, "gh", side_effect=self.fake_gh), patch.object(release.time, "sleep") as sleep:
             release.github("v0.7.33", self.directory)
             self.assertEqual([call[1] for call in self.writes], ["create"] + ["upload"] * 6 + ["edit"])
             self.assertEqual(set(self.assets), set(self.names))
@@ -73,6 +73,61 @@ class ReleaseTests(unittest.TestCase):
             self.writes.clear()
             release.github("v0.7.33", self.directory)
             self.assertEqual(self.writes, [])
+        sleep.assert_not_called()
+
+    def test_delayed_draft_visibility_is_bounded_and_never_recreates(self):
+        for visible_on in (2, 7, None):
+            with self.subTest(visible_on=visible_on):
+                self.remote, self.assets, self.writes = None, {}, []
+                polls = 0
+
+                def delayed_list(*args):
+                    nonlocal polls
+                    if args[:2] == ("api", "--paginate") and self.remote is not None:
+                        polls += 1
+                        if visible_on is None or polls < visible_on:
+                            return json.dumps([[{"tag_name": "v0.7.32", "draft": True, "assets": []}]])
+                    return self.fake_gh(*args)
+
+                with patch.object(release, "gh", side_effect=delayed_list), patch.object(release.time, "sleep") as sleep:
+                    if visible_on is None:
+                        with self.assertRaisesRegex(ValueError, "30 seconds; rerun only the GitHub release job"):
+                            release.github("v0.7.33", self.directory)
+                        self.assertEqual([call[1] for call in self.writes], ["create"])
+                        self.assertTrue(self.remote["draft"])
+                    else:
+                        release.github("v0.7.33", self.directory)
+                        self.assertEqual([call[1] for call in self.writes], ["create"] + ["upload"] * 6 + ["edit"])
+                        self.assertEqual(set(self.assets), set(self.names))
+                    self.assertEqual(polls, visible_on or 7)
+                    self.assertEqual([c.args for c in sleep.call_args_list], [(5,)] * ((visible_on or 7) - 1))
+
+    def test_api_error_after_create_stops_without_uploading_or_retrying(self):
+        def failed_list(*args):
+            if args[:2] == ("api", "--paginate") and self.remote is not None:
+                raise subprocess.CalledProcessError(1, ["gh"])
+            return self.fake_gh(*args)
+
+        with patch.object(release, "gh", side_effect=failed_list) as api, patch.object(release.time, "sleep") as sleep:
+            with self.assertRaises(subprocess.CalledProcessError):
+                release.github("v0.7.33", self.directory)
+        self.assertEqual(api.call_count, 3)
+        self.assertEqual([call[1] for call in self.writes], ["create"])
+        sleep.assert_not_called()
+
+    def test_create_error_is_not_retried_even_if_draft_was_created(self):
+        def failed_create(*args):
+            result = self.fake_gh(*args)
+            if args[:2] == ("release", "create"):
+                raise subprocess.CalledProcessError(1, ["gh"])
+            return result
+
+        with patch.object(release, "gh", side_effect=failed_create), patch.object(release.time, "sleep") as sleep:
+            with self.assertRaises(subprocess.CalledProcessError):
+                release.github("v0.7.33", self.directory)
+        self.assertEqual([call[1] for call in self.writes], ["create"])
+        self.assertTrue(self.remote["draft"])
+        sleep.assert_not_called()
 
     def test_partial_upload_resumes_without_clobber(self):
         def fail_upload(*args):

@@ -77,6 +77,11 @@ jobs:
         run: |
           set -euo pipefail
           ARKEX_SANDBOX_INTEGRATION=1 go test -count=1 -timeout=12m -v ./internal/tools -run '^TestSandboxDeveloperWorkflow$' | tee developer-tools-results.txt
+      - name: macOS sandbox diagnostics
+        if: failure() && runner.os == 'macOS'
+        shell: bash
+        run: |
+          sudo /usr/bin/log show --last 5m --style compact --predicate 'eventMessage CONTAINS "Sandbox:" OR process == "sandboxd"' > sandbox-denials.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -85,6 +90,7 @@ jobs:
             test-results.jsonl
             smoke-results.txt
             developer-tools-results.txt
+            sandbox-denials.txt
           retention-days: 14
 
   lint:

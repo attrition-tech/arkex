@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // These checks download real dependencies and resolve external names. Keep
@@ -48,8 +50,7 @@ func TestSandboxDeveloperWorkflow(t *testing.T) {
 		run(t, `set -eu
 npm install --prefix "$TMPDIR/pw" --ignore-scripts --no-audit --no-fund playwright@1.58.2
 PLAYWRIGHT_BROWSERS_PATH="$TMPDIR/browsers" node "$TMPDIR/pw/node_modules/playwright/cli.js" install chromium --only-shell`)
-		// Separate call: catches scratch publication and stale macOS copy paths.
-		output := run(t, fmt.Sprintf(`PLAYWRIGHT_BROWSERS_PATH="$TMPDIR/browsers" node - <<'JS'
+		command := fmt.Sprintf(`PLAYWRIGHT_BROWSERS_PATH="$TMPDIR/browsers" node - <<'JS'
 const { chromium } = require(process.env.TMPDIR + '/pw/node_modules/playwright');
 (async () => {
   const browser = await chromium.launch({headless: true});
@@ -61,7 +62,19 @@ const { chromium } = require(process.env.TMPDIR + '/pw/node_modules/playwright')
     console.log('browser-ok');
   } finally { await browser.close(); }
 })().catch(e => {console.error(e); process.exitCode = 1;});
-JS`, server.URL))
+JS`, server.URL)
+		// Fixed, trusted fixture only: a host control distinguishes browser/OS
+		// incompatibility from a confinement failure. Production has no fallback.
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		defer cancel()
+		control := exec.CommandContext(ctx, "/bin/sh", "-c", command)
+		control.Env = append(os.Environ(), "TMPDIR="+b.TempDir, "HOME="+t.TempDir())
+		if output, err := control.CombinedOutput(); err != nil || !strings.Contains(string(output), "browser-ok") {
+			t.Fatalf("unsandboxed fixture failed: %v\n%s", err, output)
+		}
+		t.Log("unsandboxed browser control passed")
+		// Separate call: catches scratch publication and stale macOS copy paths.
+		output := run(t, command)
 		if !strings.Contains(output, "browser-ok") {
 			t.Fatal(output)
 		}

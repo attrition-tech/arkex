@@ -100,8 +100,16 @@ func (s *sandboxRun) runtimePath(path string) string {
 	if runtime.GOOS != "darwin" {
 		return path
 	}
-	if real, err := filepath.EvalSymlinks(path); err == nil {
-		path = real
+	// New cache/output paths do not exist yet. Resolve their nearest existing
+	// ancestor too, otherwise /var aliases fail to match /private/var roots.
+	for ancestor := path; ; ancestor = filepath.Dir(ancestor) {
+		if real, err := filepath.EvalSymlinks(ancestor); err == nil {
+			rel, _ := filepath.Rel(ancestor, path)
+			path = filepath.Join(real, rel)
+			break
+		} else if !os.IsNotExist(err) || filepath.Dir(ancestor) == ancestor {
+			break
+		}
 	}
 	for _, tree := range s.trees {
 		if within(tree.path, path) {

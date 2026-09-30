@@ -39,6 +39,29 @@ func TestBashScratchEnvironment(t *testing.T) {
 	}
 }
 
+func TestBashCachePreservesDiscoveryAndPersistsBetweenCalls(t *testing.T) {
+	home, scratch := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(home, "cache"))
+	t.Setenv("PLAYWRIGHT_BROWSERS_PATH", filepath.Join(home, "browsers"))
+	t.Setenv("npm_config_cache", filepath.Join(home, "npm"))
+	b := &Bash{Dir: t.TempDir(), TempDir: scratch, Shell: "/bin/sh"}
+	for _, command := range []string{
+		`test "$XDG_CACHE_HOME" = "$HOME/cache" && test "$PLAYWRIGHT_BROWSERS_PATH" = "$HOME/browsers" && test "$npm_config_cache" = "$TMPDIR/npm-cache" && mkdir -p "$npm_config_cache" && printf cached > "$npm_config_cache/result"`,
+		`test "$(cat "$npm_config_cache/result")" = cached`,
+	} {
+		res, err := runBash(t, b, map[string]any{"command": command})
+		if err != nil {
+			t.Fatalf("%v: %s", err, res.Output)
+		}
+	}
+	sandboxContents(t, filepath.Join(scratch, "npm-cache", "result"), "cached")
+	entries, err := os.ReadDir(home)
+	if err != nil || len(entries) != 0 || os.Getenv("npm_config_cache") != filepath.Join(home, "npm") {
+		t.Fatal("modified the host cache or environment")
+	}
+}
+
 func TestBashCombinesStreamsAndRunsInDir(t *testing.T) {
 	dir := t.TempDir()
 	b := &Bash{Dir: dir, Shell: "/bin/sh"}

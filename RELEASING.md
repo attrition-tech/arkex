@@ -67,8 +67,18 @@ move to a lower version. Per-version directories are immutable; only
 `.github/workflows/ci.yml` builds, vets and tests with the race detector on Linux
 and macOS. Each platform also builds and executes the real CLI against an
 isolated local fake provider: model listing, streaming print/JSON output, and a
-file-tool round trip. Logs are
-retained as Actions artifacts for 14 days. These tests need no provider secrets.
+file-tool round trip. A separate integration check exercises Node/Ruby DNS
+resolution, scratch-local npm/Playwright installation, and an actual headless
+Chromium launch and interaction in a subsequent sandbox call. It uses Node 22
+LTS and Playwright 1.58.2, requires public npm/browser downloads and GitLab DNS,
+and runs alongside the negative filesystem/host-socket tests. To run it locally
+with Node 22, npm, Ruby and Chromium's system libraries installed:
+
+```sh
+ARKEX_SANDBOX_INTEGRATION=1 go test -count=1 -timeout=12m -v ./internal/tools -run '^TestSandboxDeveloperWorkflow$'
+```
+
+Logs are retained as Actions artifacts for 14 days. These tests need no provider secrets.
 The tag-triggered GitHub release workflow waits for this entire CI workflow on
 the tagged revision before publishing.
 

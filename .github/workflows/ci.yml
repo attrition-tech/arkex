@@ -39,6 +39,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -48,11 +51,12 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y bubblewrap apparmor-profiles apparmor-utils
+          sudo apt-get install -y bubblewrap apparmor-profiles apparmor-utils ruby
           profile=/usr/share/apparmor/extra-profiles/bwrap-userns-restrict
           test -f "$profile"
           sudo install -m 0644 "$profile" /etc/apparmor.d/bwrap-userns-restrict
           sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict
+          npx --yes playwright@1.58.2 install-deps chromium
       - run: python -m unittest discover -s scripts -p 'test_release_control.py'
       - run: go build ./...
       - run: go vet ./...
@@ -68,6 +72,11 @@ jobs:
           binary="$RUNNER_TEMP/arkex"
           go build -o "$binary" ./cmd/arkex
           python scripts/smoke.py "$binary" | tee smoke-results.txt
+      - name: Sandboxed DNS, Ruby and Playwright
+        shell: bash
+        run: |
+          set -euo pipefail
+          ARKEX_SANDBOX_INTEGRATION=1 go test -count=1 -timeout=12m -v ./internal/tools -run '^TestSandboxDeveloperWorkflow$' | tee developer-tools-results.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -75,6 +84,7 @@ jobs:
           path: |
             test-results.jsonl
             smoke-results.txt
+            developer-tools-results.txt
           retention-days: 14
 
   lint:

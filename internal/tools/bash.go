@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -84,6 +85,10 @@ func (t *Bash) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 	env := cmd.Environ()
 	if t.TempDir != "" {
 		env = append(env, "TMPDIR="+t.TempDir, "TMP="+t.TempDir, "TEMP="+t.TempDir)
+		// npm/npx need a writable cache even for project-local installs. Leave
+		// HOME, XDG_CACHE_HOME and browser discovery intact: changing them would
+		// hide existing installations. Other download locations can use $TMPDIR.
+		env = append(env, "npm_config_cache="+filepath.Join(t.TempDir, "npm-cache"))
 	}
 	cmd.Env = run.environment(env)
 	buf := limitedOutput{limit: maxBashOutput}

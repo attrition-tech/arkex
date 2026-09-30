@@ -61,20 +61,21 @@ func sandboxFilter() (*os.File, error) {
 	for _, call := range calls {
 		filters = append(filters, unix.SockFilter{Code: unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K, K: call, Jf: 1}, deny)
 	}
-	// Stream pairs stay connected to their original peer and support libuv
-	// child stdio. Datagram pairs can reconnect to host sockets: permit only
-	// exact SOCK_STREAM (plus the two supported flags), never a bit test.
+	// Stream and seqpacket pairs stay connected to their original peer and
+	// support libuv/Chromium child IPC. Datagram pairs can reconnect to host
+	// sockets: match exact connection-oriented types, never a bit test.
 	filters = append(filters,
 		equal(unix.SYS_SOCKET, 2),
 		equal(unix.SYS_SOCKETPAIR, 1),
 		ret(unix.SECCOMP_RET_ALLOW),
 		load(16), // args[0]: family
-		unix.SockFilter{Code: unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K, K: unix.AF_UNIX, Jf: 6},
+		unix.SockFilter{Code: unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K, K: unix.AF_UNIX, Jf: 7},
 		load(0),
-		equal(unix.SYS_SOCKET, 3), // socket(AF_UNIX) always denied
+		equal(unix.SYS_SOCKET, 4), // socket(AF_UNIX) always denied
 		load(24),                  // args[1]: type
 		unix.SockFilter{Code: unix.BPF_ALU | unix.BPF_AND | unix.BPF_K, K: ^uint32(unix.SOCK_CLOEXEC | unix.SOCK_NONBLOCK)},
-		equal(unix.SOCK_STREAM, 1),
+		equal(unix.SOCK_STREAM, 2),
+		equal(unix.SOCK_SEQPACKET, 1),
 		deny,
 		ret(unix.SECCOMP_RET_ALLOW),
 	)

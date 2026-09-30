@@ -31,6 +31,12 @@ func platformSandbox(ctx context.Context, trees []*sandboxTree, workdir, program
   (global-name "com.apple.trustd.agent")
   (global-name "com.apple.TrustEvaluationAgent"))
 (allow system-socket (require-all (socket-domain AF_SYSTEM) (socket-protocol 2)))
+; DNS-SD/libinfo queries use this Unix socket, not just Mach configuration
+; services. Socket creation alone grants no access to other host endpoints.
+(allow system-socket (socket-domain AF_UNIX))
+(allow network-outbound
+  (remote unix-socket (literal "/private/var/run/mDNSResponder"))
+  (remote unix-socket (literal "/var/run/mDNSResponder")))
 (allow network-outbound (remote ip "*:*"))
 (allow network-bind network-inbound (local ip "*:*"))
 (deny system-fcntl (fcntl-command 80 110))

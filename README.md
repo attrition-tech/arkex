@@ -100,7 +100,17 @@ supported managers, search packages, read version information, and install
 necessary prerequisites. The model chooses based on project requirements and
 existing installations; there is no Node-specific rule or required project file.
 Project-local dependencies still use the project's manager through sandboxed shell
-commands. Supported host-manager operations are:
+commands. npm/npx use a session-scratch cache automatically; `HOME` and browser
+discovery settings remain intact so existing installations are still readable.
+For missing test resources, direct the tool's downloads into scratch and repeat
+the same location override when running it (for example,
+`PLAYWRIGHT_BROWSERS_PATH="$TMPDIR/browsers"` for both browser installation and
+Playwright tests). Shell exports do not persist between calls; scratch does not
+survive a session restart. A missing browser is not itself a permission denial.
+Host Unix sockets such as Docker remain blocked; macOS permits only the system
+DNS resolver socket as a host-socket exception.
+
+Supported host-manager operations are:
 
 | Manager | Search and information | Installation |
 | --- | --- | --- |

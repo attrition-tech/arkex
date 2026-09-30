@@ -32,6 +32,10 @@ func platformSandbox(ctx context.Context, trees []*sandboxTree, workdir, program
 	return cmd, func() { _ = filter.Close() }, nil
 }
 
+func startBrowser(context.Context, *sandboxRun, string) (*managedBrowser, error) {
+	return nil, fmt.Errorf("managed browser attachment is macOS-only; on Linux launch Playwright directly inside bash")
+}
+
 // A read-only bind does not prevent talking to a host Unix socket. Block
 // those sockets and process/kernel escape interfaces as well. TCP/IP remains
 // available; this is local filesystem confinement, not a network firewall.

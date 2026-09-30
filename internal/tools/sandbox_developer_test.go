@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -53,7 +54,9 @@ PLAYWRIGHT_BROWSERS_PATH="$TMPDIR/browsers" node "$TMPDIR/pw/node_modules/playwr
 		command := fmt.Sprintf(`PLAYWRIGHT_BROWSERS_PATH="$TMPDIR/browsers" node - <<'JS'
 const { chromium } = require(process.env.TMPDIR + '/pw/node_modules/playwright');
 (async () => {
-  const browser = await chromium.launch({headless: true});
+  const browser = process.env.ARKEX_BROWSER_WS_ENDPOINT
+    ? await chromium.connectOverCDP(process.env.ARKEX_BROWSER_WS_ENDPOINT, {isLocal: true})
+    : await chromium.launch({headless: true});
   try {
     const page = await browser.newPage();
     await page.goto(%q);
@@ -74,9 +77,18 @@ JS`, server.URL)
 		}
 		t.Log("unsandboxed browser control passed")
 		// Separate call: catches scratch publication and stale macOS copy paths.
-		output := run(t, command)
-		if !strings.Contains(output, "browser-ok") {
-			t.Fatal(output)
+		input := map[string]any{"command": command, "timeout_ms": 600000}
+		if runtime.GOOS == "darwin" {
+			// Ordinary shell children must not gain a global Chromium IPC grant.
+			res, err := runBash(t, b, input)
+			if err == nil || !strings.Contains(res.Output, "MachPortRendezvousServer") || !strings.Contains(res.Output, "Permission denied") {
+				t.Fatalf("expected ordinary browser IPC denial: %v\n%s", err, res.Output)
+			}
+			input["browser"] = "chromium"
+		}
+		res, err := runBash(t, b, input)
+		if err != nil || !strings.Contains(res.Output, "browser-ok") {
+			t.Fatalf("supported browser workflow: %v\n%s", err, res.Output)
 		}
 	})
 }

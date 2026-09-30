@@ -31,18 +31,20 @@ type bashInput struct {
 	Command   string `json:"command"`
 	Workdir   string `json:"workdir,omitempty"`
 	TimeoutMS int    `json:"timeout_ms,omitempty"`
+	Browser   string `json:"browser,omitempty"`
 }
 
 func (*Bash) Name() string { return "bash" }
 func (*Bash) Description() string {
-	return "Run a shell command in a private working copy and return its combined output. Completed commands publish changed files to the workspace and scratch; conflicts or unsupported filesystem entries block publication. On macOS use relative workspace paths and $TMPDIR: original absolute paths are read-only. Long-running or interactive commands are not supported; set timeout_ms for slow commands (max 10 minutes)."
+	return "Run a shell command in a private working copy and return its combined output. Completed commands publish changed files to the workspace and scratch; conflicts or unsupported filesystem entries block publication. On macOS use relative workspace paths and $TMPDIR: original absolute paths are read-only. For macOS browser automation set browser=chromium and attach with Playwright chromium.connectOverCDP(process.env.ARKEX_BROWSER_WS_ENDPOINT, {isLocal:true}); ordinary chromium.launch() is blocked. Arkex downloads a verified stock browser, gives it only its own IPC endpoint, and stops it when this call ends. This is CDP attachment, not full Playwright launch compatibility. Linux uses normal Playwright launch without this option. Long-running or interactive commands are not supported; set timeout_ms for slow commands (max 10 minutes)."
 }
 
 func (*Bash) Schema() map[string]any {
 	return schema(map[string]any{
 		"command":    prop("string", "Shell command to run"),
 		"workdir":    prop("string", "Starting directory, absolute or workspace-relative; defaults to the workspace. Use instead of cd. Supports ~/ but not shell expansions."),
-		"timeout_ms": prop("integer", "Shell execution timeout in milliseconds, excluding sandbox preparation and publication. Default 120000; maximum 600000. Cancellation still stops the whole operation."),
+		"timeout_ms": prop("integer", "Execution timeout in milliseconds, including managed browser setup but excluding sandbox preparation and publication. Default 120000; maximum 600000. Cancellation still stops the whole operation."),
+		"browser":    map[string]any{"type": "string", "enum": []string{"chromium"}, "description": "macOS only: start an isolated, verified stock Chromium for this call. Attach through ARKEX_BROWSER_WS_ENDPOINT. Requires session scratch; the first call downloads about 100 MB, cached and reverified in scratch. No custom executable, launch arguments or persistent browser session."},
 	}, "command")
 }
 
@@ -53,6 +55,9 @@ func (t *Bash) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 	}
 	if strings.TrimSpace(in.Command) == "" {
 		return Result{}, errors.New("command is required")
+	}
+	if in.Browser != "" && (in.Browser != "chromium" || t.TempDir == "") {
+		return Result{}, errors.New("browser must be chromium and requires active session scratch")
 	}
 	timeout := defaultBashTimeout
 	if in.TimeoutMS > 0 {
@@ -103,7 +108,20 @@ func (t *Bash) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 		cancel(context.DeadlineExceeded)
 		close(timeoutDone)
 	})
-	err = cmd.Run()
+	defer timer.Stop()
+	if in.Browser != "" {
+		browser, startErr := startBrowser(executionCtx, run, t.TempDir)
+		if startErr != nil {
+			return Result{}, fmt.Errorf("managed browser startup failed; command not run and unpublished changes discarded: %w", startErr)
+		}
+		defer browser.Close()
+		cmd.Env = append(cmd.Env, "ARKEX_BROWSER_WS_ENDPOINT="+browser.endpoint)
+		err = cmd.Run()
+		// Stop before capture/publication; the browser shares these private trees.
+		browser.Close()
+	} else {
+		err = cmd.Run()
+	}
 	if !timer.Stop() {
 		<-timeoutDone
 	}

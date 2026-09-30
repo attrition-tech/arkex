@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -14,6 +16,13 @@ func platformSandbox(ctx context.Context, trees []*sandboxTree, workdir, program
 	if _, err := os.Stat(seatbelt); err != nil {
 		return nil, nil, fmt.Errorf("macOS shell tools require %s (execution blocked): %w", seatbelt, err)
 	}
+	args := append([]string{"-p", darwinProfile(trees), program}, argv...)
+	cmd := exec.CommandContext(ctx, seatbelt, args...)
+	cmd.Dir = workdir
+	return cmd, func() {}, nil
+}
+
+func darwinProfile(trees []*sandboxTree) string {
 	var profile strings.Builder
 	profile.WriteString(`(version 1)
 (deny default)
@@ -52,8 +61,42 @@ func platformSandbox(ctx context.Context, trees []*sandboxTree, workdir, program
 		// not redirect a later tool call's writable-root resolution.
 		fmt.Fprintf(&profile, "(deny file-write-unlink (literal %s))\n", strconv.Quote(tree.execution))
 	}
-	args := append([]string{"-p", profile.String(), program}, argv...)
-	cmd := exec.CommandContext(ctx, seatbelt, args...)
-	cmd.Dir = workdir
-	return cmd, func() {}, nil
+	return profile.String()
+}
+
+func startBrowser(ctx context.Context, run *sandboxRun, scratch string) (*managedBrowser, error) {
+	stock := filepath.Join(run.temp, "browser-stock")
+	program, err := prepareChromium(ctx, run.runtimePath(scratch), stock, runtime.GOARCH)
+	if err != nil {
+		return nil, err
+	}
+	data := filepath.Join(run.temp, "browser-data")
+	if err := os.Mkdir(data, 0o700); err != nil {
+		return nil, err
+	}
+	trees := append(append([]*sandboxTree(nil), run.trees...), &sandboxTree{execution: data})
+	args := []string{"--headless", "--no-sandbox", "--disable-gpu", "--disable-breakpad", "--no-first-run", "--disable-background-networking", "--remote-debugging-port=0", "--user-data-dir=" + filepath.Join(data, "profile")}
+	cmd := darwinBrowserCommand(ctx, darwinBrowserProfile(trees, stock), program, args...)
+	cmd.Dir = data
+	cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + data, "TMPDIR=" + data, "TMP=" + data, "TEMP=" + data}
+	return launchManagedBrowser(ctx, cmd)
+}
+
+func darwinBrowserProfile(trees []*sandboxTree, stock string) string {
+	profile := darwinProfile(trees) + `
+(allow mach-register mach-lookup
+  (global-name (string-append "org.chromium.Chromium.MachPortRendezvousServer." (param "ARKEX_BROWSER_PID"))))
+`
+	// Only this verified stock distribution may execute under the extra grant.
+	// Neither model-selected programs nor loader/environment overrides enter it.
+	return profile + fmt.Sprintf("(deny process-exec (require-not (subpath %s)))\n", strconv.Quote(stock))
+}
+
+// The fixed bootstrap and sandbox-exec both exec, preserving the browser PID.
+// No user command is interpolated or run before applying the profile. Ordinary
+// shells never receive this grant, including children of the model's command.
+func darwinBrowserCommand(ctx context.Context, profile, program string, args ...string) *exec.Cmd {
+	bootstrap := `profile=$1; shift; exec /usr/bin/sandbox-exec -D "ARKEX_BROWSER_PID=$$" -p "$profile" "$@"`
+	argv := append([]string{"-c", bootstrap, "arkex-browser", profile, program}, args...)
+	return exec.CommandContext(ctx, "/bin/sh", argv...)
 }

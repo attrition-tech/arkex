@@ -20,6 +20,9 @@ func platformSandbox(ctx context.Context, trees []*sandboxTree, workdir, program
 (allow file-read* file-map-executable process-exec process-fork sysctl-read)
 (allow signal (target same-sandbox))
 (allow process-info* (target same-sandbox))
+; Power notifications used during Chromium startup. Older Chromium releases
+; dereference a null notification port when this specific client is denied.
+(allow iokit-open (iokit-user-client-class "RootDomainUserClient"))
 (allow mach-lookup
   (global-name "com.apple.system.opendirectoryd.libinfo")
   (global-name "com.apple.system.opendirectoryd.membership")

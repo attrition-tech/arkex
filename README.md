@@ -110,6 +110,28 @@ survive a session restart. A missing browser is not itself a permission denial.
 Host Unix sockets such as Docker remain blocked; macOS permits only the system
 DNS resolver socket as a host-socket exception.
 
+On **macOS**, browser automation uses the bash tool's optional
+`"browser": "chromium"` field. Arkex starts a verified stock headless Chromium
+for that call and supplies `ARKEX_BROWSER_WS_ENDPOINT`. The script attaches with
+`chromium.connectOverCDP(process.env.ARKEX_BROWSER_WS_ENDPOINT, {isLocal:true})`;
+ordinary `chromium.launch()` remains blocked. Install the project's Playwright
+client normally, but no separate browser installation is needed for this mode.
+This is CDP attachment, not full Playwright launch compatibility, and does not
+support custom binaries, launch flags, Firefox/WebKit, or browser reuse across
+calls. Run a local test server and its browser script in the same call. Linux
+continues to use ordinary Playwright launch without the `browser` option.
+
+The first managed call downloads about 100 MB from Google's Chrome-for-Testing
+distribution into session scratch. Arkex checks a pinned SHA-256 before each
+use and extracts the entire stock distribution outside tool-writable paths.
+The browser receives only its own PID-specific Mach rendezvous permission, a
+clean environment, and permission to execute only that stock distribution.
+Ordinary shell processes receive no additional IPC permissions. The verified
+browser is trusted code for its IPC behavior; this is not a security guarantee
+against vulnerabilities in Chromium itself. Browser profiles are disposable,
+and browser shutdown precedes file publication. Cancellation discards unpublished
+changes, as with other shell calls. No unrestricted-launch fallback exists.
+
 Supported host-manager operations are:
 
 | Manager | Search and information | Installation |

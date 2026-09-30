@@ -109,19 +109,7 @@ func (t *Bash) Run(ctx context.Context, input json.RawMessage) (Result, error) {
 		close(timeoutDone)
 	})
 	defer timer.Stop()
-	if in.Browser != "" {
-		browser, startErr := startBrowser(executionCtx, run, t.TempDir)
-		if startErr != nil {
-			return Result{}, fmt.Errorf("managed browser startup failed; command not run and unpublished changes discarded: %w", startErr)
-		}
-		defer browser.Close()
-		cmd.Env = append(cmd.Env, "ARKEX_BROWSER_WS_ENDPOINT="+browser.endpoint)
-		err = cmd.Run()
-		// Stop before capture/publication; the browser shares these private trees.
-		browser.Close()
-	} else {
-		err = cmd.Run()
-	}
+	err = executeShellSandbox(executionCtx, run, t.TempDir, in.Browser)
 	if !timer.Stop() {
 		<-timeoutDone
 	}

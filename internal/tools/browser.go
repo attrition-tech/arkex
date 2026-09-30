@@ -21,14 +21,14 @@ import (
 // The managed browser is trusted stock code, never a model-selected executable.
 // Keep the complete distribution outside both writable trees. The downloadable
 // archive may be cached in scratch, but its digest is checked before every use.
-const managedChromiumVersion = "145.0.7632.6"
+const managedChromiumVersion = "154.0.8037.92"
 
 func chromiumArchive(arch string) (platform, digest string, err error) {
 	switch arch {
 	case "arm64":
-		return "mac-arm64", "8510b9b1575538aa6a092ed16d981738b2ebf52c5e41ea4c54a7ce16756cdcf5", nil
+		return "mac-arm64", "77da14e75d7f2568e6f7898d3df7cdc6faac74b15e903b2c9d486ebb6ca9b929", nil
 	case "amd64":
-		return "mac-x64", "4316f7f98213a173e2356406203359cd4ab5b2b2db36cb219b9d99edec746819", nil
+		return "mac-x64", "a54292aaacbb77f76f6ef47558e7c51ab884044e0adacca315567f83c060bcc4", nil
 	default:
 		return "", "", fmt.Errorf("managed Chromium is unsupported on %s", arch)
 	}
@@ -88,18 +88,22 @@ func downloadChromium(ctx context.Context, endpoint, archive string) error {
 }
 
 func unpackChromium(ctx context.Context, file *os.File, digest, destination string) error {
+	// A scratch cache can be a symlink to mutable data. Verify and extract a
+	// private copy, never reread executable bytes from the caller-owned file.
+	verified, err := os.CreateTemp(filepath.Dir(destination), ".browser-archive-")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = verified.Close(); _ = os.Remove(verified.Name()) }()
 	hash := sha256.New()
-	if _, err := io.Copy(hash, io.LimitReader(file, (512<<20)+1)); err != nil {
+	n, err := io.Copy(io.MultiWriter(verified, hash), io.LimitReader(file, (512<<20)+1))
+	if err != nil {
 		return err
 	}
 	if fmt.Sprintf("%x", hash.Sum(nil)) != digest {
 		return errors.New("SHA-256 mismatch")
 	}
-	info, err := file.Stat()
-	if err != nil {
-		return err
-	}
-	reader, err := zip.NewReader(file, info.Size())
+	reader, err := zip.NewReader(verified, n)
 	if err != nil {
 		return err
 	}
@@ -223,5 +227,8 @@ func launchManagedBrowser(ctx context.Context, cmd *exec.Cmd) (*managedBrowser, 
 		err = errors.New("browser startup timed out")
 	}
 	b.Close()
+	if cause := context.Cause(ctx); cause != nil {
+		err = cause
+	}
 	return nil, fmt.Errorf("%w\n%s", err, output.String())
 }

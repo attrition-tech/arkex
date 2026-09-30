@@ -32,8 +32,11 @@ func platformSandbox(ctx context.Context, trees []*sandboxTree, workdir, program
 	return cmd, func() { _ = filter.Close() }, nil
 }
 
-func startBrowser(context.Context, *sandboxRun, string) (*managedBrowser, error) {
-	return nil, fmt.Errorf("managed browser attachment is macOS-only; on Linux launch Playwright directly inside bash")
+func executeShellSandbox(_ context.Context, run *sandboxRun, _, browser string) error {
+	if browser != "" {
+		return fmt.Errorf("managed browser attachment is macOS-only; on Linux launch Playwright directly inside bash")
+	}
+	return run.cmd.Run()
 }
 
 // A read-only bind does not prevent talking to a host Unix socket. Block

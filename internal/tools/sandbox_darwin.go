@@ -64,6 +64,19 @@ func darwinProfile(trees []*sandboxTree) string {
 	return profile.String()
 }
 
+func executeShellSandbox(ctx context.Context, run *sandboxRun, scratch, requestedBrowser string) error {
+	if requestedBrowser != "" {
+		browser, err := startBrowser(ctx, run, scratch)
+		if err != nil {
+			return fmt.Errorf("managed browser startup failed; command not run and unpublished changes discarded: %w", err)
+		}
+		// Stop before capture/publication; both processes share the private trees.
+		defer browser.Close()
+		run.cmd.Env = append(run.cmd.Env, "ARKEX_BROWSER_WS_ENDPOINT="+browser.endpoint)
+	}
+	return run.cmd.Run()
+}
+
 func startBrowser(ctx context.Context, run *sandboxRun, scratch string) (*managedBrowser, error) {
 	stock := filepath.Join(run.temp, "browser-stock")
 	program, err := prepareChromium(ctx, run.runtimePath(scratch), stock, runtime.GOARCH)

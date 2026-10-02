@@ -7,10 +7,9 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
-// Model is one entry of the Codex model catalog.
+// Model is one entry of the account-specific model catalog.
 type Model struct {
 	ID              string   // slug used in requests
 	Name            string   // display name
@@ -22,19 +21,16 @@ type Model struct {
 // ListModels fetches the catalog the signed-in account can use and returns
 // the models the backend marks as visible, in catalog order.
 func ListModels(ctx context.Context, client *http.Client, ep Endpoints, tokens Tokens) ([]Model, error) {
-	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
+	client = oauthClient(client)
+	if err := tokens.ValidateAccess(); err != nil {
+		return nil, err
 	}
-	url := ep.base() + "/models?client_version=" + codexVersion
+	url := ep.base() + "/models"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+tokens.AccessToken)
-	if tokens.AccountID != "" {
-		req.Header.Set("ChatGPT-Account-ID", tokens.AccountID)
-	}
-	req.Header.Set("originator", Originator)
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -44,11 +40,12 @@ func ListModels(ctx context.Context, client *http.Client, ep Endpoints, tokens T
 	if err != nil {
 		return nil, err
 	}
-	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return nil, &SignedOutError{Status: resp.Status}
-	}
 	if resp.StatusCode/100 != 2 {
-		return nil, fmt.Errorf("model catalog: %s: %s", resp.Status, strings.TrimSpace(string(body)))
+		requestID := strings.TrimSpace(resp.Header.Get("x-request-id"))
+		if requestID != "" {
+			return nil, fmt.Errorf("model catalog: %s (request %s)", resp.Status, requestID)
+		}
+		return nil, fmt.Errorf("model catalog: %s", resp.Status)
 	}
 	var raw struct {
 		Models []struct {
@@ -67,7 +64,7 @@ func ListModels(ctx context.Context, client *http.Client, ep Endpoints, tokens T
 	}
 	var out []Model
 	for _, m := range raw.Models {
-		if m.Slug == "" || (m.Visibility != "" && m.Visibility != "list") {
+		if m.Slug == "" || m.Visibility != "list" {
 			continue
 		}
 		mm := Model{ID: m.Slug, Name: m.DisplayName, ContextWindow: m.ContextWindow, Reasoning: m.DefaultReasoning}

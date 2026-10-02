@@ -2,9 +2,11 @@ package chatgpt
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -23,7 +25,32 @@ type Store struct {
 
 type authFile struct {
 	Version int               `json:"version"`
+	HostID  string            `json:"hostId,omitempty"`
 	ChatGPT map[string]Tokens `json:"chatgpt"`
+}
+
+// hostID returns this installation's stable OAuth agent-host identifier.
+func (s *Store) hostID(ctx context.Context) (string, error) {
+	unlock, err := s.lock(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	f, err := s.read()
+	if err != nil {
+		return "", err
+	}
+	if f.HostID != "" {
+		return f.HostID, nil
+	}
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	f.HostID = fmt.Sprintf("urn:uuid:%08x-%04x-%04x-%04x-%012x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+	return f.HostID, s.write(f)
 }
 
 // lock coordinates edits and rotating refresh tokens across processes and store instances.
@@ -66,6 +93,17 @@ func (s *Store) Update(ctx context.Context, id string, fn func(Tokens) (Tokens, 
 	previous := t
 	t, err = fn(t)
 	if err != nil {
+		var signedOut *SignedOutError
+		if errors.As(err, &signedOut) {
+			// Keep the account-bound registration, but make unusable credentials
+			// impossible to retry. Transient failures leave the old pair intact.
+			previous.AccessToken, previous.RefreshToken, previous.IDToken = "", "", ""
+			previous.ExpiresAt = time.Time{}
+			accounts[id] = previous
+			if writeErr := s.write(f); writeErr != nil {
+				return Tokens{}, writeErr
+			}
+		}
 		return Tokens{}, err
 	}
 	if t == previous {
@@ -73,6 +111,41 @@ func (s *Store) Update(ctx context.Context, id string, fn func(Tokens) (Tokens, 
 	}
 	accounts[id] = t
 	return t, s.write(f)
+}
+
+// SignOut revokes the selected refresh token when possible and clears local
+// credentials. forget also removes its registration, under the same lock, so a
+// concurrent sign-in cannot be removed between revocation and deletion.
+func (s *Store) SignOut(ctx context.Context, client *http.Client, ep Endpoints, id string, forget bool) error {
+	unlock, err := s.lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	f, err := s.read()
+	if err != nil {
+		return err
+	}
+	t, ok := f.ChatGPT[id]
+	if !ok {
+		return nil
+	}
+	var warning error
+	if t.RefreshToken != "" {
+		if err := revoke(ctx, client, ep, t); err != nil {
+			warning = errors.New("signed out locally, but remote revocation was not confirmed; disconnect the app in ChatGPT Settings")
+		}
+	}
+	t.AccessToken, t.RefreshToken, t.IDToken = "", "", ""
+	t.ExpiresAt = time.Time{}
+	f.ChatGPT[id] = t
+	if forget {
+		delete(f.ChatGPT, id)
+	}
+	if err := s.write(f); err != nil {
+		return err
+	}
+	return warning
 }
 
 // DefaultStore returns the store in the arkex config directory.

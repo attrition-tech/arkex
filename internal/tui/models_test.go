@@ -95,7 +95,7 @@ func TestConnectionsAddFlowFormPickerSaveConnect(t *testing.T) {
 	if f.get("kind").sel != 2 || !f.get("url").hidden || !f.get("key").hidden || f.get("login").hidden || !f.get("fetch").hidden {
 		t.Fatalf("subscription fields: url hidden=%v key hidden=%v login hidden=%v fetch hidden=%v", f.get("url").hidden, f.get("key").hidden, f.get("login").hidden, f.get("fetch").hidden)
 	}
-	if !strings.Contains(panelText(m), "Sign in with ChatGPT") || strings.Contains(panelText(m), "Base URL") {
+	if !strings.Contains(panelText(m), "Continue with ChatGPT") || strings.Contains(panelText(m), "Base URL") {
 		t.Fatalf("subscription form:\n%s", panelText(m))
 	}
 	// Disabled kinds are skipped: right from Subscription wraps to LLM server.

@@ -36,6 +36,33 @@ Configuration and sessions stay in `~/.arkex/`. API keys can reference environme
 variables instead of being stored directly, for example `"apiKey": "$MY_API_KEY"`.
 Prompts and relevant project content are sent to the model provider you choose.
 
+### Sign in with ChatGPT
+
+Choose **Subscription → ChatGPT → Continue with ChatGPT** in `/connections`.
+Arkex uses OpenAI's official open-source Sign in with ChatGPT flow and public
+Responses API, not the private Codex backend. Existing ChatGPT connections need
+a fresh browser sign-in; old credentials cannot be reused. Your saved sessions
+and connection settings remain. Refetch models after signing in to see the
+models currently available to your account.
+
+Signing in and granting ChatGPT plan usage are separate. If the browser grants
+only identity access, Arkex keeps the registration but blocks inference and
+offers **Enable ChatGPT plan usage**. Availability and limits depend on OpenAI's
+preview and your account; manage usage at `https://chatgpt.com/settings/usage`.
+An API-key connection remains a separate option.
+
+Credentials, account-bound client IDs, and the installation's stable host ID
+live in `~/.arkex/auth.json` with owner-only permissions. Refresh tokens rotate
+under a cross-process lock. **Sign out** attempts remote revocation and clears
+local tokens while keeping the registration and configured models. Deleting a
+connection also attempts revocation, then forgets its local registration. If
+revocation cannot be confirmed, disconnect the app in ChatGPT Settings.
+
+Inference streams with `store=false` and explicit conversation/tool history.
+Failed, incomplete, and disconnected streams are not treated as completed
+responses. The current model SDK retains reasoning metadata locally but does
+not replay encrypted reasoning; visible messages and tool results are replayed.
+
 For terminal sound/visual alerts, add `"ui": {"bell": true}` to your config.
 Alerts fire when retry input is needed and when a run completes, fails, or
 pauses—not when you cancel. Off by default; your terminal controls the sound

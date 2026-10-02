@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/openai"
@@ -16,7 +17,7 @@ import (
 // at a temp file.
 var AuthStore = chatgpt.DefaultStore
 
-// openChatGPT builds a model on the Codex backend using the ChatGPT
+// openChatGPT builds a public Responses model using the ChatGPT
 // sign-in saved for the connection. The saved tokens are loaded once here
 // and live only in the transport, which refreshes and re-saves them.
 func openChatGPT(ctx context.Context, ref config.ModelRef, client *http.Client) (*Model, error) {
@@ -31,8 +32,11 @@ func openChatGPT(ctx context.Context, ref config.ModelRef, client *http.Client) 
 	if !ok {
 		return nil, fmt.Errorf("connection %q is not signed in; open /connections and sign in with ChatGPT", ref.ConnID)
 	}
-	base := ref.Conn.BaseURL
-	if base == "" {
+	if err := tok.ValidateAccess(); err != nil {
+		return nil, fmt.Errorf("connection %q cannot use ChatGPT plan inference: %w", ref.ConnID, err)
+	}
+	base := strings.TrimRight(ref.Conn.BaseURL, "/")
+	if base == "" || base == "https://chatgpt.com/backend-api/codex" {
 		base = chatgpt.BaseURL
 	}
 	tr := chatgpt.NewTransport(client.Transport, tok, store, ref.ConnID, UserAgent)
@@ -60,7 +64,7 @@ func openChatGPT(ctx context.Context, ref config.ModelRef, client *http.Client) 
 	if err != nil {
 		return nil, fmt.Errorf("model %s: %w", ref, err)
 	}
-	// No Limit: the Codex backend does not take max_output_tokens, and the
+	// No Limit: ChatGPT plan inference does not take max_output_tokens, and the
 	// transport strips it anyway.
 	return &Model{
 		Ref:  ref,
@@ -70,10 +74,10 @@ func openChatGPT(ctx context.Context, ref config.ModelRef, client *http.Client) 
 }
 
 // OpenAIResponsesOptions builds the per-call options for a Responses API
-// request on the Codex backend: encrypted reasoning comes back so the
-// next turn can carry it (nothing is stored server-side), reasoning
-// summaries are requested, and the thinking level maps onto reasoning
-// effort. "max" becomes "xhigh", the highest level the backend accepts.
+// request using ChatGPT plan permission. Nothing is stored server-side.
+// Reasoning summaries and encrypted metadata are requested, although Fantasy
+// v0.43 omits reasoning parts from explicit-history replay. The thinking level
+// maps onto reasoning effort; "max" is the compatibility alias for "xhigh".
 func OpenAIResponsesOptions(level string) (*openai.ResponsesProviderOptions, error) {
 	if level == "on" {
 		return nil, fmt.Errorf("responses API reasoning requires an explicit effort level")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -98,13 +99,13 @@ type modelsPanel struct {
 	pickFrom panelMode // pmAdd or pmEdit: where the picker returns
 
 	// subscriptions
-	store     *chatgpt.Store            // saved sign-ins
-	auth      map[string]chatgpt.Tokens // by connection id, for the list rows
-	login     *chatgpt.Login            // in-flight browser sign-in
-	loginCtx  context.Context
-	loginStop context.CancelFunc
-	draftTok  *chatgpt.Tokens          // sign-in made while adding; saved with the draft
-	catalog   map[string]chatgpt.Model // last fetched subscription catalog, by id
+	store       *chatgpt.Store            // saved sign-ins
+	auth        map[string]chatgpt.Tokens // by connection id, for the list rows
+	login       *chatgpt.Login            // in-flight browser sign-in
+	loginCtx    context.Context
+	loginStop   context.CancelFunc
+	draftAuthID string                   // durable registration associated with this draft
+	catalog     map[string]chatgpt.Model // last fetched subscription catalog, by id
 
 	// picker
 	filter  textinput.Model
@@ -131,6 +132,18 @@ type loginDoneMsg struct {
 	tokens chatgpt.Tokens
 	err    error
 	ctx    context.Context
+}
+
+type signOutDoneMsg struct {
+	owner *modelsPanel
+	id    string
+	err   error
+}
+
+type connectionRemovedMsg struct {
+	owner *modelsPanel
+	id    string
+	err   error
 }
 
 type connectedMsg struct {
@@ -380,7 +393,13 @@ func (m *model) panelAction(id string) tea.Cmd {
 		if r.model == nil {
 			err = config.RemoveConnection(m.o.ConfigPath, r.provID)
 			if err == nil && r.prov.Kind == config.KindSubscription && (r.prov.Subscription == "" || r.prov.Subscription == "chatgpt") && p.store != nil {
-				err = p.store.Remove(r.provID) // the sign-in goes with the connection
+				store, ep := p.store, m.o.Login
+				p.after, p.mode, p.busy = pmList, pmBusy, "removing ChatGPT connection"
+				return tea.Batch(p.spin.Tick, func() tea.Msg {
+					ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+					defer cancel()
+					return connectionRemovedMsg{owner: p, id: r.provID, err: store.SignOut(ctx, nil, ep, r.provID, true)}
+				})
 			}
 		} else {
 			err = config.RemoveModel(m.o.ConfigPath, r.provID, r.model.ID)
@@ -431,14 +450,14 @@ var kindHelp = map[config.Kind]string{
 	config.KindSubscription: "your ChatGPT plan, signed in through the browser; no key to paste",
 }
 
-const subscriptionNote = "Uses your ChatGPT plan through the Codex backend. Your browser opens to sign in; " +
-	"arkex keeps only the sign-in tokens, in auth.json next to config.json (mode 0600)."
+const subscriptionNote = "Authorize arkex to use your ChatGPT plan through OpenAI's public API. " +
+	"Registration and tokens stay in auth.json (mode 0600). Usage: chatgpt.com/settings/usage."
 
 func (m *model) openAdd() tea.Cmd {
 	p := m.panel
 	p.mode, p.err, p.note = pmAdd, "", ""
 	p.editID, p.editConn = "", config.Connection{}
-	p.draftTok = nil
+	p.draftAuthID = ""
 	f := newForm()
 	f.add(choiceField("kind", "Kind", kindOptions, 0))
 	f.add(choiceField("service", "Service", nil, 0)).gap = true
@@ -454,7 +473,7 @@ func (m *model) openAdd() tea.Cmd {
 	models.hidden, models.gap = true, true
 	fetch := f.add(buttonField("fetch", "Fetch models →"))
 	fetch.gap, fetch.primary = true, true
-	login := f.add(buttonField("login", "Sign in with ChatGPT →"))
+	login := f.add(buttonField("login", "Continue with ChatGPT →"))
 	login.gap, login.primary = true, true
 	save := f.add(buttonField("save", "Save"))
 	save.inline, save.hidden, save.primary = true, true, true
@@ -504,12 +523,12 @@ func (p *modelsPanel) setKind(i int) {
 // applyPreset prefills URL, name and key hint from the selected service.
 func (p *modelsPanel) applyPreset() {
 	f := p.form
-	p.draftTok, p.catalog = nil, nil
+	p.draftAuthID, p.catalog = "", nil
 	kind := formKinds[min(f.get("kind").sel, len(formKinds)-1)]
 	presets := setup.PresetsFor(kind)
 	p.preset = presets[min(f.get("service").sel, len(presets)-1)]
 	if kind == config.KindSubscription {
-		f.get("login").label = "Sign in with " + p.preset.Label + " →"
+		f.get("login").label = "Continue with " + p.preset.Label + " →"
 		f.get("subnote").text = subscriptionNote
 	}
 
@@ -572,7 +591,7 @@ func (m *model) openEdit(id string) tea.Cmd {
 	if sub {
 		who := "not signed in"
 		if t, ok := p.auth[id]; ok {
-			who = "signed in as " + t.Summary()
+			who = t.Summary()
 		}
 		f.add(noteField(who)).id = "who"
 	} else {
@@ -593,7 +612,11 @@ func (m *model) openEdit(id string) tea.Cmd {
 		f.add(checkField("model:"+md.ID, label, !md.Disabled))
 	}
 	if sub {
-		f.add(buttonField("login", "Sign in again")).gap = true
+		label := "Continue with ChatGPT"
+		if tok := p.auth[id]; tok.ClientID != "" && tok.AccessToken != "" && !tok.PlanEnabled() {
+			label = "Enable ChatGPT plan usage"
+		}
+		f.add(buttonField("login", label)).gap = true
 		f.add(buttonField("signout", "Sign out")).inline = true
 	}
 	save := f.add(buttonField("save", "Save"))
@@ -624,7 +647,7 @@ func (m *model) formKey(k tea.KeyPressMsg) tea.Cmd {
 
 func (p *modelsPanel) closeForm() {
 	p.mode, p.form, p.err = pmList, nil, ""
-	p.draft, p.draftID, p.draftTok = config.Connection{}, "", nil
+	p.draft, p.draftID, p.draftAuthID = config.Connection{}, "", ""
 }
 
 // formAction reacts to a form action id (button or "changed:<field>").
@@ -656,15 +679,13 @@ func (m *model) formAction(action string) tea.Cmd {
 		if p.store == nil {
 			return nil
 		}
-		if err := p.store.Remove(p.editID); err != nil {
-			p.err = err.Error()
-			return nil
-		}
-		delete(p.auth, p.editID)
-		if who := f.get("who"); who != nil {
-			who.text = "not signed in"
-		}
-		p.note = "signed out of " + p.editID + " · its models stay until you delete the connection"
+		id, store, ep := p.editID, p.store, m.o.Login
+		p.after, p.mode, p.busy = p.mode, pmBusy, "signing out of ChatGPT"
+		return tea.Batch(p.spin.Tick, func() tea.Msg {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			return signOutDoneMsg{owner: p, id: id, err: store.SignOut(ctx, nil, ep, id, false)}
+		})
 	case "fetch", "refetch":
 		if !m.buildDraft() {
 			return nil
@@ -672,8 +693,8 @@ func (m *model) formAction(action string) tea.Cmd {
 		p.pickFrom = p.mode
 		if p.formKind() == config.KindSubscription {
 			tok, ok := p.auth[p.editID]
-			if !ok {
-				p.err = "not signed in; use Sign in again first"
+			if !ok || tok.AccessToken == "" {
+				p.err = "not signed in; use Continue with ChatGPT first"
 				return nil
 			}
 			return m.fetchCatalog(tok)
@@ -747,7 +768,7 @@ func (m *model) buildDraft() bool {
 		// No URL field: the backend is fixed, kept from an edited
 		// connection so a hand-edited baseUrl survives.
 		u = p.editConn.BaseURL
-		if u == "" {
+		if u == "" || strings.TrimRight(u, "/") == "https://chatgpt.com/backend-api/codex" {
 			u = p.preset.BaseURL
 		}
 	} else {
@@ -792,7 +813,7 @@ func (m *model) buildDraft() bool {
 	d := p.editConn // keeps Headers, Compat, Models, Name of an edited connection
 	d.Kind, d.API, d.BaseURL, d.APIKey = p.preset.Kind, config.APIOpenAICompat, u, key
 	if sub {
-		d.API = config.APIOpenAI // Responses API on the Codex backend
+		d.API = config.APIOpenAI // Public Responses API with ChatGPT plan permission
 		d.Subscription = p.preset.ID
 	}
 	d.Disabled = !f.get("enabled").on
@@ -831,12 +852,33 @@ func (m *model) fetchModels() tea.Cmd {
 // the sign-in screen. The result arrives as loginDoneMsg.
 func (m *model) startLogin() tea.Cmd {
 	p := m.panel
+	if !m.buildDraft() {
+		return nil
+	}
 	if p.loginStop != nil {
 		p.loginStop()
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ep := m.o.Login
+	ep.Store = p.store
+	id := p.editID
+	if id == "" {
+		id = p.draftAuthID
+	}
+	if id == "" {
+		id = p.draftID
+	}
+	if p.store != nil {
+		saved, _, err := p.store.Get(id)
+		if err != nil {
+			p.err = err.Error()
+			return nil
+		}
+		ep.Registration = saved
+		ep.Consent = saved.ClientID != "" && saved.AccessToken != "" && !saved.PlanEnabled()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	p.loginCtx = ctx
-	l, err := chatgpt.StartLogin(ctx, nil, m.o.Login)
+	l, err := chatgpt.StartLogin(ctx, nil, ep)
 	if err != nil {
 		cancel()
 		p.err = err.Error()
@@ -878,9 +920,7 @@ func (m *model) loginAction(id string) tea.Cmd {
 	return nil
 }
 
-// loginDone applies the outcome of a browser sign-in: while editing, the
-// tokens are saved right away; while adding, they wait in the draft and
-// the model catalog is fetched.
+// loginDone saves a validated registration before fetching the model catalog.
 func (m *model) loginDone(msg loginDoneMsg) tea.Cmd {
 	p := m.panel
 	if msg.ctx != nil && msg.ctx.Err() != nil {
@@ -897,6 +937,13 @@ func (m *model) loginDone(msg loginDoneMsg) tea.Cmd {
 	if p.form == nil {
 		return nil
 	}
+	id := p.editID
+	if id == "" {
+		id = p.draftAuthID
+	}
+	if id == "" {
+		id = p.draftID
+	}
 	switch {
 	case errors.Is(msg.err, context.Canceled):
 		p.note = "sign-in cancelled"
@@ -905,17 +952,37 @@ func (m *model) loginDone(msg loginDoneMsg) tea.Cmd {
 		p.err = "sign-in code expired; sign in again"
 		return nil
 	case msg.err != nil:
+		// A code can expire after dynamic registration succeeded. Preserve the
+		// issued ID for retry, but never treat this as a signed-in account.
+		if msg.tokens.ClientID != "" && p.store != nil {
+			if err := p.store.Put(id, msg.tokens); err != nil {
+				p.err = err.Error()
+				return nil
+			}
+			p.draftAuthID = id
+		}
 		p.err = msg.err.Error()
 		return nil
 	}
 	tok := msg.tokens
-	if p.editID != "" {
-		if p.store != nil {
-			if err := p.store.Put(p.editID, tok); err != nil {
-				p.err = err.Error()
-				return nil
-			}
+	// Registration must survive a catalog failure, denied plan permission,
+	// or cancelling the model picker. It is separate from config.json.
+	if p.store != nil {
+		if err := p.store.Put(id, tok); err != nil {
+			p.err = err.Error()
+			return nil
 		}
+	}
+	p.draftAuthID = id
+	if !tok.PlanEnabled() {
+		p.auth[id] = tok
+		p.form.get("login").label = "Enable ChatGPT plan usage"
+		p.note = tok.Summary()
+		p.err = "ChatGPT plan usage was not granted. Enable it above or add an API-key connection."
+		return nil
+	}
+	p.form.get("login").label = "Continue with ChatGPT"
+	if p.editID != "" {
 		if p.auth == nil {
 			p.auth = map[string]chatgpt.Tokens{}
 		}
@@ -926,7 +993,6 @@ func (m *model) loginDone(msg loginDoneMsg) tea.Cmd {
 		p.note = "signed in as " + tok.Summary()
 		return nil
 	}
-	p.draftTok = &tok
 	p.pickFrom = pmAdd
 	return m.fetchCatalog(tok)
 }
@@ -937,10 +1003,16 @@ func (m *model) fetchCatalog(tok chatgpt.Tokens) tea.Cmd {
 	p.after, p.mode, p.err = p.pickFrom, pmBusy, ""
 	p.busy = "fetching the models your plan includes"
 	ep := m.o.Login
+	store, id := p.store, p.editID
+	if id == "" {
+		id = p.draftAuthID
+	}
 	return tea.Batch(p.spin.Tick, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		ms, err := chatgpt.ListModels(ctx, nil, ep, tok)
+		tr := chatgpt.NewTransport(nil, tok, store, id, m.o.UserAgent)
+		tr.Endpoints = ep
+		ms, err := chatgpt.ListModels(ctx, &http.Client{Transport: tr, Timeout: 30 * time.Second}, ep, tok)
 		if err != nil {
 			return modelsFetchedMsg{err: err, owner: p}
 		}
@@ -996,19 +1068,19 @@ func (m *model) saveDraft(ids []string) tea.Cmd {
 	}
 	err := config.UpdateConnection(m.o.ConfigPath, p.editID, p.draftID, d, defSel)
 	if err == nil && d.Kind == config.KindSubscription && p.store != nil {
-		// The sign-in follows the connection: saved under the new id, or
-		// moved when the connection was renamed.
-		switch {
-		case p.draftTok != nil:
-			err = p.store.Put(p.draftID, *p.draftTok)
-		case !adding && p.editID != p.draftID:
-			err = p.store.Rename(p.editID, p.draftID)
+		// Move the latest durable credentials, never a pre-refresh draft copy.
+		id := p.editID
+		if id == "" {
+			id = p.draftAuthID
+		}
+		if id != "" {
+			err = p.store.Rename(id, p.draftID)
 		}
 	}
 	p.form = nil
 	p.mode = pmList
 	m.afterEdit(err, done, p.draftID)
-	p.draft, p.draftID, p.editID, p.draftTok = config.Connection{}, "", "", nil // do not keep the secret around
+	p.draft, p.draftID, p.editID, p.draftAuthID = config.Connection{}, "", "", ""
 	if err != nil || !adding || m.sess.Agent != nil || first == "" || d.Disabled {
 		return nil
 	}
@@ -1185,6 +1257,36 @@ func (m *model) panelMsg(msg tea.Msg) (tea.Cmd, bool) {
 			return nil, true
 		}
 		return m.loginDone(msg), true
+
+	case signOutDoneMsg:
+		if p == nil || p != msg.owner || p.form == nil || p.editID != msg.id {
+			return nil, true
+		}
+		p.mode, p.busy = p.after, ""
+		if saved, ok, err := p.store.Get(msg.id); err == nil && ok {
+			p.auth[msg.id] = saved
+			if who := p.form.get("who"); who != nil {
+				who.text = saved.Summary()
+			}
+		}
+		p.form.get("login").label = "Continue with ChatGPT"
+		if msg.err != nil {
+			p.err = msg.err.Error()
+		} else {
+			p.note = "signed out of " + msg.id + " · its registration and models are kept"
+		}
+		return nil, true
+
+	case connectionRemovedMsg:
+		if p == nil || p != msg.owner {
+			return nil, true
+		}
+		p.mode, p.busy = pmList, ""
+		m.afterEdit(nil, "removed "+msg.id, "")
+		if msg.err != nil {
+			p.err = msg.err.Error()
+		}
+		return nil, true
 
 	case modelsFetchedMsg:
 		if p == nil || p.form == nil || (msg.owner != nil && msg.owner != p) {

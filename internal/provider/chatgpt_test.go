@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -63,7 +64,7 @@ func TestOpenChatGPTStreams(t *testing.T) {
 	defer be.Close()
 
 	store := &chatgpt.Store{Path: filepath.Join(t.TempDir(), "auth.json")}
-	if err := store.Put("cg", chatgpt.Tokens{AccessToken: "at", RefreshToken: "rt", AccountID: "acct_9", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+	if err := store.Put("cg", chatgpt.Tokens{AccessToken: "at", RefreshToken: "rt", ClientID: "oaiapp_test", Subject: "user_1", Issuer: "https://auth.example", Scopes: "resource.invoke chatgpt.tokens.use.direct", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
 	old := AuthStore
@@ -113,10 +114,10 @@ func TestOpenChatGPTStreams(t *testing.T) {
 	}
 
 	s := <-got
-	if s.hdr.Get("Authorization") != "Bearer at" || s.hdr.Get("ChatGPT-Account-ID") != "acct_9" || s.hdr.Get("originator") != chatgpt.Originator {
+	if s.hdr.Get("Authorization") != "Bearer at" || s.hdr.Get("ChatGPT-Account-ID") != "" || s.hdr.Get("originator") != "" {
 		t.Fatalf("headers %v", s.hdr)
 	}
-	if !strings.HasPrefix(s.hdr.Get("User-Agent"), chatgpt.Originator+"/") || !strings.Contains(s.hdr.Get("User-Agent"), UserAgent) {
+	if s.hdr.Get("User-Agent") != UserAgent {
 		t.Fatalf("user agent %q", s.hdr.Get("User-Agent"))
 	}
 	if s.body["instructions"] != "You are arkex." || s.body["store"] != false || s.body["stream"] != true {
@@ -188,5 +189,119 @@ func TestOpenAIResponsesOptions(t *testing.T) {
 	}
 	if _, err := OpenAIResponsesOptions("turbo"); err == nil {
 		t.Fatal("bad level accepted")
+	}
+}
+
+func TestChatGPTToolRoundTripAndTerminalEvents(t *testing.T) {
+	const toolStream = `event: response.output_item.added
+data: {"type":"response.output_item.added","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","namespace":"arkex","name":"lookup","arguments":"","status":"in_progress"}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","output_index":0,"item":{"id":"fc_1","type":"function_call","call_id":"call_1","namespace":"arkex","name":"lookup","arguments":"{\"key\":\"value\"}","status":"completed"}}
+
+`
+	terminals := map[string]string{
+		"completed":            "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n",
+		"failed":               "event: response.failed\ndata: {\"type\":\"response.failed\",\"response\":{\"error\":{\"code\":\"subscription_sharing_usage_limit_exceeded\",\"message\":\"Plan limit reached\"}}}\n\n",
+		"incomplete":           "event: response.incomplete\ndata: {\"type\":\"response.incomplete\",\ndata: \"response\":{\"status\":\"incomplete\",\"incomplete_details\":{\"reason\":\"max_output_tokens\"}}}\n\n",
+		"incomplete-no-reason": "data: {\"type\":\"response.incomplete\",\"response\":{\"status\":\"incomplete\"}}\n\n",
+		"truncated":            "",
+	}
+	for name, terminal := range terminals {
+		t.Run(name, func(t *testing.T) {
+			var requests atomic.Int32
+			bodies := make(chan map[string]any, 2)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				bodies <- body
+				w.Header().Set("Content-Type", "text/event-stream")
+				if requests.Add(1) == 1 {
+					_, _ = io.WriteString(w, toolStream+terminal)
+				} else {
+					_, _ = io.WriteString(w, fakeStream)
+				}
+			}))
+			defer server.Close()
+			store := &chatgpt.Store{Path: filepath.Join(t.TempDir(), "auth.json")}
+			if err := store.Put("cg", chatgpt.Tokens{ClientID: "oaiapp_test", Subject: "subject", Issuer: chatgpt.Issuer, AccessToken: "test-access", Scopes: "chatgpt.tokens.use.direct", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+				t.Fatal(err)
+			}
+			old := AuthStore
+			AuthStore = func() (*chatgpt.Store, error) { return store, nil }
+			defer func() { AuthStore = old }()
+			m, err := Open(t.Context(), config.ModelRef{ConnID: "cg", Conn: config.Connection{Kind: config.KindSubscription, BaseURL: server.URL}, Model: config.Model{ID: "gpt-test"}}, server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			prompt := fantasy.Prompt{fantasy.NewSystemMessage("Use tools."), fantasy.NewUserMessage("Look up value.")}
+			tools := []fantasy.Tool{fantasy.FunctionTool{Name: "lookup", InputSchema: map[string]any{"type": "object", "properties": map[string]any{"key": map[string]any{"type": "string"}}}}}
+			seq, err := m.LM.Stream(t.Context(), m.Call(prompt, tools))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var call fantasy.ToolCallPart
+			var finish fantasy.FinishReason
+			var streamErr error
+			for part := range seq {
+				switch part.Type {
+				case fantasy.StreamPartTypeToolCall:
+					call = fantasy.ToolCallPart{ToolCallID: part.ID, ToolName: part.ToolCallName, Input: part.ToolCallInput}
+				case fantasy.StreamPartTypeFinish:
+					finish = part.FinishReason
+				case fantasy.StreamPartTypeError:
+					streamErr = part.Error
+				}
+			}
+			body := <-bodies
+			namespace := body["tools"].([]any)[0].(map[string]any)
+			if namespace["type"] != "namespace" || namespace["name"] != "arkex" || namespace["tools"].([]any)[0].(map[string]any)["name"] != "lookup" {
+				t.Fatalf("tools: %v", namespace)
+			}
+			if name != "completed" {
+				if streamErr == nil || finish != "" {
+					t.Fatalf("unsuccessful stream accepted: finish=%s err=%v", finish, streamErr)
+				}
+				if name == "failed" && !strings.Contains(streamErr.Error(), "subscription_sharing_usage_limit_exceeded") {
+					t.Fatal("usage error code lost")
+				}
+				return
+			}
+			if streamErr != nil || finish != fantasy.FinishReasonToolCalls || call.ToolName != "lookup" || call.ToolCallID != "call_1" || call.Input != `{"key":"value"}` {
+				t.Fatalf("call=%+v finish=%s err=%v", call, finish, streamErr)
+			}
+			prompt = append(prompt, fantasy.Message{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{call}}, fantasy.Message{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{fantasy.ToolResultPart{ToolCallID: call.ToolCallID, Output: fantasy.ToolResultOutputContentText{Text: "found value"}}}})
+			seq, err = m.LM.Stream(t.Context(), m.Call(prompt, tools))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var answer strings.Builder
+			for part := range seq {
+				if part.Type == fantasy.StreamPartTypeError {
+					t.Fatal(part.Error)
+				}
+				if part.Type == fantasy.StreamPartTypeTextDelta {
+					answer.WriteString(part.Delta)
+				}
+				if part.Type == fantasy.StreamPartTypeFinish {
+					finish = part.FinishReason
+				}
+			}
+			if answer.String() != "hello there" || finish != fantasy.FinishReasonStop {
+				t.Fatal("second turn did not complete")
+			}
+			body = <-bodies
+			items := body["input"].([]any)
+			if len(items) != 3 {
+				t.Fatalf("history=%v", items)
+			}
+			replay := items[1].(map[string]any)
+			result := items[2].(map[string]any)
+			if replay["namespace"] != "arkex" || replay["name"] != "lookup" || replay["call_id"] != "call_1" || result["call_id"] != "call_1" || result["output"] != "found value" {
+				t.Fatalf("bad tool history: %v", items)
+			}
+		})
 	}
 }

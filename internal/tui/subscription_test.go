@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/attrition-tech/arkex/internal/chatgpt"
 	"github.com/attrition-tech/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/testutil"
 )
 
 func TestLegacySubscriptionEditKeepsProvider(t *testing.T) {
@@ -41,32 +41,34 @@ func TestUnsupportedSubscriptionCannotBeEditedIntoAnotherProvider(t *testing.T) 
 	}
 }
 
-// fakeOpenAI is one server standing in for auth.openai.com (token
-// exchange) and the Codex backend (model catalog).
+// fakeOpenAI serves signed OIDC credentials and the public model catalog.
 type fakeOpenAI struct {
 	srv       *httptest.Server
 	exchanges atomic.Int32
+	refreshes atomic.Int32
 	catalogs  atomic.Int32
 	failList  atomic.Bool
-}
-
-func unsignedJWT(t *testing.T, payload map[string]any) string {
-	t.Helper()
-	b, err := json.Marshal(payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	enc := base64.RawURLEncoding.EncodeToString
-	return enc([]byte(`{"alg":"none"}`)) + "." + enc(b) + ".x"
+	noPlan    atomic.Bool
+	nonce     atomic.Value
+	revoked   atomic.Int32
 }
 
 func newFakeOpenAI(t *testing.T) *fakeOpenAI {
 	f := &fakeOpenAI{}
-	auth := map[string]any{"chatgpt_account_id": "acct_7", "chatgpt_plan_type": "pro"}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/oauth/token", func(w http.ResponseWriter, r *http.Request) {
+	fake := testutil.NewSIWC(t)
+	f.srv = fake.Server
+	mux := fake.Mux
+	mux.HandleFunc("/api/accounts/oauth/token", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		form, _ := url.ParseQuery(string(body))
+		if form.Get("grant_type") == "refresh_token" {
+			f.refreshes.Add(1)
+			if form.Get("refresh_token") != "rt" || form.Get("client_id") != "oaiapp_tui" {
+				t.Error("incorrect refresh credentials")
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "rotated-access", "refresh_token": "rotated-refresh", "token_type": "Bearer", "expires_in": 3600})
+			return
+		}
 		if form.Get("grant_type") != "authorization_code" || form.Get("code") != "good" || form.Get("code_verifier") == "" {
 			w.WriteHeader(400)
 			w.Write([]byte(`{"error":"invalid_grant"}`)) //nolint:errcheck
@@ -74,15 +76,28 @@ func newFakeOpenAI(t *testing.T) *fakeOpenAI {
 		}
 		f.exchanges.Add(1)
 		w.Header().Set("Content-Type", "application/json")
+		scopes := "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"
+		if f.noPlan.Load() {
+			scopes = "openid profile email"
+		}
+		nonce, _ := f.nonce.Load().(string)
 		json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
-			"access_token":  unsignedJWT(t, map[string]any{"exp": time.Now().Add(time.Hour).Unix(), "https://api.openai.com/auth": auth}),
+			"access_token":  "access-tui",
 			"refresh_token": "rt",
-			"id_token":      unsignedJWT(t, map[string]any{"email": "dev@example.com", "https://api.openai.com/auth": auth}),
+			"id_token":      fake.IDToken("subject_7", "oaiapp_tui", nonce),
+			"token_type":    "Bearer", "expires_in": 3600, "scope": scopes,
 		})
+	})
+	mux.HandleFunc("/revoke", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		if r.Form.Get("client_id") != "oaiapp_tui" || r.Form.Get("token_type_hint") != "refresh_token" {
+			t.Error("bad revocation form")
+		}
+		f.revoked.Add(1)
 	})
 	mux.HandleFunc("/models", func(w http.ResponseWriter, r *http.Request) {
 		f.catalogs.Add(1)
-		if r.Header.Get("Authorization") == "" || r.Header.Get("ChatGPT-Account-ID") != "acct_7" {
+		if r.Header.Get("Authorization") == "" || r.Header.Get("ChatGPT-Account-ID") != "" {
 			w.WriteHeader(401)
 			return
 		}
@@ -96,8 +111,6 @@ func newFakeOpenAI(t *testing.T) *fakeOpenAI {
 		  {"slug":"gpt-5.3","display_name":"GPT-5.3","visibility":"list","context_window":272000},
 		  {"slug":"secret","visibility":"hide"}]}`))
 	})
-	f.srv = httptest.NewServer(mux)
-	t.Cleanup(f.srv.Close)
 	return f
 }
 
@@ -109,10 +122,15 @@ func subscriptionModel(t *testing.T) (*model, *string, *fakeOpenAI, *string) {
 	opened := new(string)
 	m.o.Auth = &chatgpt.Store{Path: m.o.ConfigPath[:len(m.o.ConfigPath)-len("config.json")] + "auth.json"}
 	m.o.Login = chatgpt.Endpoints{
-		Issuer:      fake.srv.URL,
-		BaseURL:     fake.srv.URL,
-		OpenBrowser: func(u string) error { *opened = u; return nil },
-		Ports:       []int{0},
+		Issuer:  fake.srv.URL,
+		BaseURL: fake.srv.URL,
+		OpenBrowser: func(u string) error {
+			*opened = u
+			parsed, _ := url.Parse(u)
+			fake.nonce.Store(parsed.Query().Get("nonce"))
+			return nil
+		},
+		Ports: []int{0},
 	}
 	m.openModels("")
 	return m, sel, fake, opened
@@ -136,8 +154,10 @@ func finishLogin(t *testing.T, m *model, waitCmd tea.Cmd, code string) tea.Cmd {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The listener is on 127.0.0.1; the URL says localhost for the browser.
-	cb := "http://127.0.0.1:" + redirect.Port() + redirect.Path + "?code=" + code + "&state=" + url.QueryEscape(q.Get("state"))
+	if redirect.Hostname() != "127.0.0.1" {
+		t.Fatalf("callback host = %q, want IPv4 loopback", redirect.Hostname())
+	}
+	cb := redirect.String() + "?code=" + url.QueryEscape(code) + "&state=" + url.QueryEscape(q.Get("state")) + "&client_id=oaiapp_tui"
 	done := make(chan []tea.Msg, 1)
 	go func() { done <- runCmd(waitCmd) }()
 	resp, err := http.Get(cb)
@@ -175,7 +195,7 @@ func TestSubscriptionAddSignInPickSave(t *testing.T) {
 	if p.formKind() != config.KindSubscription || f.value("name") != "chatgpt" || p.preset.ID != "chatgpt" {
 		t.Fatalf("subscription prefill: kind=%v name=%q preset=%s", p.formKind(), f.value("name"), p.preset.ID)
 	}
-	if !strings.Contains(panelText(m), "Sign in with ChatGPT") || !strings.Contains(panelText(m), "auth.json") {
+	if !strings.Contains(panelText(m), "Continue with ChatGPT") || !strings.Contains(panelText(m), "auth.json") {
 		t.Fatalf("form:\n%s", panelText(m))
 	}
 	// tab: service → name → enabled → sign-in button.
@@ -187,11 +207,11 @@ func TestSubscriptionAddSignInPickSave(t *testing.T) {
 	if p.mode != pmLogin || p.login == nil || *opened != p.login.URL {
 		t.Fatalf("sign-in not started: mode=%v opened=%q", p.mode, *opened)
 	}
-	if !strings.HasPrefix(p.login.URL, fake.srv.URL+"/oauth/authorize?") {
+	if !strings.HasPrefix(p.login.URL, fake.srv.URL+"/api/accounts/authorize?") {
 		t.Fatalf("authorize URL %q", p.login.URL)
 	}
 	txt := panelText(m)
-	if !strings.Contains(txt, "Sign in with ChatGPT") || !strings.Contains(txt, "/oauth/authorize?") || !strings.Contains(txt, "  Copy link  ") || strings.Contains(txt, "[ Copy link ]") {
+	if !strings.Contains(txt, "Sign in with ChatGPT") || !strings.Contains(txt, "/api/accounts/authorize?") || !strings.Contains(txt, "  Copy link  ") || strings.Contains(txt, "[ Copy link ]") {
 		t.Fatalf("login screen:\n%s", txt)
 	}
 	// c copies the link (a clipboard command comes back) and says so.
@@ -204,12 +224,12 @@ func TestSubscriptionAddSignInPickSave(t *testing.T) {
 	if fake.exchanges.Load() != 1 {
 		t.Fatalf("code exchanges = %d", fake.exchanges.Load())
 	}
-	if p.mode != pmBusy || p.draftTok == nil || p.draftTok.Email != "dev@example.com" {
-		t.Fatalf("after sign-in: mode=%v tok=%+v", p.mode, p.draftTok)
+	if p.mode != pmBusy || p.draftAuthID != "chatgpt" {
+		t.Fatalf("after sign-in: mode=%v registration=%q", p.mode, p.draftAuthID)
 	}
-	// Nothing is saved until the models are picked.
-	if all, _ := m.o.Auth.All(); len(all) != 0 {
-		t.Fatalf("tokens saved early: %v", all)
+	// Registration is durable even if model discovery/picking is interrupted.
+	if saved, ok, _ := m.o.Auth.Get("chatgpt"); !ok || saved.ClientID != "oaiapp_tui" {
+		t.Fatal("registration was not saved")
 	}
 	for _, msg := range runCmd(next) {
 		if fm, ok := msg.(modelsFetchedMsg); ok {
@@ -246,7 +266,7 @@ func TestSubscriptionAddSignInPickSave(t *testing.T) {
 		t.Fatalf("default %q", cfg.Default)
 	}
 	tok, ok, err := m.o.Auth.Get("chatgpt")
-	if err != nil || !ok || tok.RefreshToken != "rt" || tok.AccountID != "acct_7" || tok.Plan != "pro" {
+	if err != nil || !ok || tok.RefreshToken != "rt" || tok.Subject != "subject_7" || tok.ClientID != "oaiapp_tui" {
 		t.Fatalf("stored tokens: %+v %v %v", tok, ok, err)
 	}
 	// Config never carries the tokens.
@@ -256,7 +276,7 @@ func TestSubscriptionAddSignInPickSave(t *testing.T) {
 	}
 	// The list names the account.
 	m.Update(*connected)
-	if !strings.Contains(panelText(m), "dev@example.com · pro") {
+	if !strings.Contains(panelText(m), "dev@example.com") {
 		t.Fatalf("list row:\n%s", panelText(m))
 	}
 }
@@ -279,11 +299,14 @@ func TestSubscriptionLoginCancelAndCatalogFallback(t *testing.T) {
 	if p.mode != pmAdd || p.form == nil || p.note != "sign-in cancelled" || p.login != nil {
 		t.Fatalf("after cancel: mode=%v note=%q login=%v", p.mode, p.note, p.login)
 	}
-	// A wrong code is reported, not saved.
+	// A wrong code retains registration, but not credentials.
 	_, cmd = m.Update(key("enter"))
 	finishLogin(t, m, cmd, "bad")
-	if p.mode != pmAdd || p.err == "" || p.draftTok != nil {
+	if p.mode != pmAdd || p.err == "" || p.draftAuthID != "chatgpt" {
 		t.Fatalf("bad code: mode=%v err=%q", p.mode, p.err)
+	}
+	if saved, _, _ := m.o.Auth.Get("chatgpt"); saved.AccessToken != "" {
+		t.Fatal("failed code exchange stored credentials")
 	}
 	// Catalog failure falls back to typing model ids; tokens still save.
 	fake.failList.Store(true)
@@ -317,7 +340,7 @@ func TestSubscriptionEditSignOutRenameDelete(t *testing.T) {
 	if err := config.SaveConnection(m.o.ConfigPath, "cg", conn, "cg/gpt-5.3-codex"); err != nil {
 		t.Fatal(err)
 	}
-	if err := m.o.Auth.Put("cg", chatgpt.Tokens{AccessToken: "a", RefreshToken: "r", AccountID: "acct_7", Email: "old@example.com", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+	if err := m.o.Auth.Put("cg", chatgpt.Tokens{AccessToken: "a", RefreshToken: "r", ClientID: "oaiapp_tui", Subject: "subject_7", Issuer: fake.srv.URL, Scopes: "chatgpt.tokens.use.direct", Email: "old@example.com", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
 	typeKeys(m, "r")
@@ -329,16 +352,21 @@ func TestSubscriptionEditSignOutRenameDelete(t *testing.T) {
 	if p.mode != pmEdit || f.get("url") != nil || f.get("key") != nil || f.get("login") == nil || f.get("signout") == nil {
 		t.Fatalf("edit form fields: %v", p.mode)
 	}
-	if !strings.Contains(panelText(m), "signed in as old@example.com") {
+	if !strings.Contains(panelText(m), "old@example.com") {
 		t.Fatalf("edit form:\n%s", panelText(m))
 	}
 	// Sign out forgets the tokens but keeps the connection.
 	_ = f.focusID("signout")
-	typeKeys(m, "enter")
-	if _, ok, _ := m.o.Auth.Get("cg"); ok {
-		t.Fatal("sign out kept the tokens")
+	_, signOut := m.Update(key("enter"))
+	for _, msg := range runCmd(signOut) {
+		if done, ok := msg.(signOutDoneMsg); ok {
+			m.Update(done)
+		}
 	}
-	if !strings.Contains(panelText(m), "not signed in") {
+	if saved, ok, _ := m.o.Auth.Get("cg"); !ok || saved.AccessToken != "" || saved.ClientID != "oaiapp_tui" || fake.revoked.Load() != 1 {
+		t.Fatal("sign out did not revoke/clear credentials and retain registration")
+	}
+	if !strings.Contains(panelText(m), "sign-in needed") {
 		t.Fatalf("after sign out:\n%s", panelText(m))
 	}
 	// Refetch without a sign-in is refused.
@@ -380,12 +408,65 @@ func TestSubscriptionEditSignOutRenameDelete(t *testing.T) {
 	if _, ok := mustLoad(t, m).Connections["work"]; !ok {
 		t.Fatal("rename not saved")
 	}
-	// Deleting the connection deletes the sign-in.
-	typeKeys(m, "d", "y")
+	// Deleting the connection revokes and forgets the sign-in.
+	typeKeys(m, "d")
+	_, removeCmd := m.Update(key("y"))
+	for _, msg := range runCmd(removeCmd) {
+		if done, ok := msg.(connectionRemovedMsg); ok {
+			m.Update(done)
+		}
+	}
+	if fake.revoked.Load() != 2 {
+		t.Fatal("deletion did not revoke the new refresh token")
+	}
 	if _, ok := mustLoad(t, m).Connections["work"]; ok {
 		t.Fatal("connection not deleted")
 	}
 	if all, _ := m.o.Auth.All(); len(all) != 0 {
 		t.Fatalf("tokens survive delete: %v", all)
+	}
+}
+
+func TestSubscriptionEnablePlanAndPreserveCatalogRefresh(t *testing.T) {
+	m, _, fake, opened := subscriptionModel(t)
+	fake.noPlan.Store(true)
+	typeKeys(m, "a", "right", "right", "tab", "tab", "tab", "tab")
+	_, cmd := m.Update(key("enter"))
+	if next := finishLogin(t, m, cmd, "good"); next != nil || fake.catalogs.Load() != 0 {
+		t.Fatal("identity-only login started inference/catalog")
+	}
+	p := m.panel
+	if p.mode != pmAdd || !strings.Contains(panelText(m), "Enable ChatGPT plan usage") {
+		t.Fatalf("no-plan state: %s", panelText(m))
+	}
+	// Rename the draft before enabling: it must reuse the issued registration.
+	p.form.get("name").input.SetValue("work")
+	fake.noPlan.Store(false)
+	cmd = m.formAction("login")
+	u, _ := url.Parse(*opened)
+	if u.Query().Get("client_id") != "oaiapp_tui" || u.Query().Get("prompt") != "consent" {
+		t.Fatal("enable plan created another registration or missed explicit consent")
+	}
+	next := finishLogin(t, m, cmd, "good")
+	tok, _, _ := m.o.Auth.Get("chatgpt")
+	tok.ExpiresAt = time.Now().Add(-time.Minute)
+	if err := m.o.Auth.Put("chatgpt", tok); err != nil {
+		t.Fatal(err)
+	}
+	for _, msg := range runCmd(next) {
+		if fetched, ok := msg.(modelsFetchedMsg); ok {
+			m.Update(fetched)
+		}
+	}
+	if p.mode != pmPick || fake.refreshes.Load() != 1 {
+		t.Fatalf("catalog refresh failed: %s", p.err)
+	}
+	typeKeys(m, "space", "down", "down", "enter")
+	saved, ok, err := m.o.Auth.Get("work")
+	if err != nil || !ok || saved.RefreshToken != "rotated-refresh" || saved.AccessToken != "rotated-access" {
+		t.Fatal("save/rename overwrote catalog-refreshed credentials")
+	}
+	if _, ok, _ := m.o.Auth.Get("chatgpt"); ok {
+		t.Fatal("draft registration was not moved")
 	}
 }

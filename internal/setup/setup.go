@@ -53,7 +53,7 @@ var Presets = []Preset{
 	{ID: "moonshot", Label: "Moonshot", Hint: "Kimi, api.moonshot.ai", Kind: config.KindAPIKey, BaseURL: "https://api.moonshot.ai/v1", NeedsKey: true},
 	{ID: "other-api", Label: "Other", Hint: "any hosted OpenAI-compatible API", Kind: config.KindAPIKey, NeedsKey: true},
 
-	{ID: "chatgpt", Label: "ChatGPT", Hint: "sign in with your ChatGPT Plus/Pro/Team account; uses your plan, not API credit", Kind: config.KindSubscription, BaseURL: chatgpt.BaseURL, Compat: config.Compat{Thinking: config.ThinkingReasoningEffort}},
+	{ID: "chatgpt", Label: "ChatGPT", Hint: "authorize eligible ChatGPT plan usage; no API key needed", Kind: config.KindSubscription, BaseURL: chatgpt.BaseURL, Compat: config.Compat{Thinking: config.ThinkingReasoningEffort}},
 }
 
 // PresetsFor returns the presets of one kind, in display order. The last

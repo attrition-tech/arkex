@@ -130,7 +130,7 @@ func TestEventNameCoversEveryEvent(t *testing.T) {
 	all := []agent.Event{
 		agent.TurnStart{}, agent.TextDelta{}, agent.ReasoningDelta{}, agent.ToolCallStart{},
 		agent.ToolCallInputDelta{}, agent.ToolCall{}, agent.ToolDecision{}, agent.ToolResult{},
-		agent.ReasoningTime{}, agent.RequestTiming{},
+		agent.ReasoningTime{}, agent.RequestTiming{}, agent.RequestSent{},
 		agent.RetryWait{}, agent.RequestRestart{},
 		agent.TurnEnd{}, agent.Compacting{}, agent.RunEnd{},
 	}

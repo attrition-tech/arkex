@@ -15,10 +15,19 @@ type RequestTiming struct {
 	Dispatch   time.Duration `json:"dispatch_ns"`
 	Connection time.Duration `json:"connection_ns"`
 	FirstToken time.Duration `json:"first_token_ns"`
+	FirstText  time.Duration `json:"first_text_ns"` // request preparation to first nonempty answer delta
 	Total      time.Duration `json:"total_ns"`
 }
 
 func (RequestTiming) isEvent() {}
+
+// RequestSent marks the first successful HTTP request write of an attempt.
+// It starts the live request-to-answer counter, excluding local preparation.
+type RequestSent struct {
+	At time.Time `json:"at"`
+}
+
+func (RequestSent) isEvent() {}
 
 // ReasoningTime completes an observed reasoning segment, not server-side
 // thinking that happened before the stream began.
@@ -31,7 +40,7 @@ func (ReasoningTime) isEvent() {}
 
 // HTTP trace hooks may run on transport goroutines. Only the first successful
 // write is recorded; retries remain included in total/first-content latency.
-func traceRequest(ctx context.Context, start time.Time) (context.Context, func() (time.Duration, time.Duration)) {
+func traceRequest(ctx context.Context, start time.Time, sent func(time.Time)) (context.Context, func() (time.Duration, time.Duration)) {
 	var mu sync.Mutex
 	var dispatch, connection time.Duration
 	var connecting time.Time
@@ -51,7 +60,11 @@ func traceRequest(ctx context.Context, start time.Time) (context.Context, func()
 		WroteRequest: func(info httptrace.WroteRequestInfo) {
 			mu.Lock()
 			if info.Err == nil && dispatch == 0 {
-				dispatch = time.Since(start)
+				at := time.Now()
+				dispatch = at.Sub(start)
+				if sent != nil {
+					sent(at)
+				}
 			}
 			mu.Unlock()
 		},

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"strings"
 	"sync"
@@ -53,6 +54,9 @@ func (t *Transport) base() http.RoundTripper {
 // token returns a usable access token, refreshing when it is (nearly)
 // expired or when force is set.
 func (t *Transport) token(ctx context.Context, force bool) (Tokens, error) {
+	// Refresh/discovery requests are preparation, not inference dispatch.
+	// Retain cancellation, deadlines and other values, but hide its HTTP trace.
+	ctx = authContext{ctx}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	adopted := false
@@ -123,6 +127,16 @@ func (t *Transport) token(ctx context.Context, force bool) (Tokens, error) {
 	// Do not expose a rotated token in memory unless it was persisted.
 	t.tokens = nt
 	return nt, nt.ValidateAccess()
+}
+
+type authContext struct{ context.Context }
+
+func (c authContext) Value(key any) any {
+	v := c.Context.Value(key)
+	if _, ok := v.(*httptrace.ClientTrace); ok {
+		return nil
+	}
+	return v
 }
 
 // UserAgentString is arkex's ordinary application user agent.

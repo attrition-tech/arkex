@@ -67,9 +67,16 @@ func TestRequestTimingBoundaries(t *testing.T) {
 			a := &Agent{Model: timingModel(t, srv.URL)}
 			var got RequestTiming
 			var reasoning ReasoningTime
+			var sentAt, firstTextAt time.Time
 			count := 0
 			_, err := a.stream(t.Context(), func(e Event) {
 				switch e := e.(type) {
+				case RequestSent:
+					sentAt = e.At
+				case TextDelta:
+					if firstTextAt.IsZero() {
+						firstTextAt = e.At
+					}
 				case RequestTiming:
 					got = e
 					count++
@@ -100,13 +107,28 @@ func TestRequestTimingBoundaries(t *testing.T) {
 			if mode == "reasoning" && (reasoning.Duration < 20*time.Millisecond || reasoning.Duration > got.Total-got.FirstToken+5*time.Millisecond) {
 				t.Fatalf("reasoning includes initial wait: %+v %+v", reasoning, got)
 			}
+			if mode == "reasoning" || mode == "text" {
+				if sentAt.IsZero() || firstTextAt.IsZero() || firstTextAt.Sub(sentAt) != got.FirstText-got.Dispatch {
+					t.Fatalf("live timestamps differ from request measurements: sent=%v text=%v timing=%+v", sentAt, firstTextAt, got)
+				}
+				if got.FirstText < got.FirstToken || got.FirstText > got.Total {
+					t.Fatalf("bad first answer boundary: %+v", got)
+				}
+				if mode == "reasoning" && got.FirstText-got.FirstToken < 20*time.Millisecond {
+					t.Fatalf("reasoning counted as answer text: %+v", got)
+				}
+			} else if got.FirstText != 0 {
+				t.Fatalf("invented answer text: %+v", got)
+			}
 		})
 	}
 }
 
 func TestRequestTimingAccumulatesConnectionsAcrossAttempts(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		ctx, timing := traceRequest(t.Context(), time.Now())
+		start := time.Now()
+		var sent []time.Time
+		ctx, timing := traceRequest(t.Context(), start, func(at time.Time) { sent = append(sent, at) })
 		trace := httptrace.ContextClientTrace(ctx)
 		trace.GetConn("first")
 		time.Sleep(time.Millisecond)
@@ -120,6 +142,9 @@ func TestRequestTimingAccumulatesConnectionsAcrossAttempts(t *testing.T) {
 		dispatch, connection := timing()
 		if dispatch != time.Millisecond || connection != 3*time.Millisecond {
 			t.Fatalf("want first dispatch 1ms and cumulative connection 3ms, got (%s, %s)", dispatch, connection)
+		}
+		if len(sent) != 1 || sent[0].Sub(start) != time.Millisecond {
+			t.Fatalf("want one first-write event, got %v", sent)
 		}
 	})
 }

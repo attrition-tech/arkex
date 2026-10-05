@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"os"
 	"path/filepath"
 	"strings"
@@ -62,7 +63,7 @@ func TestStore(t *testing.T) {
 }
 
 func TestTransportRefreshLifecycle(t *testing.T) {
-	var refreshes, requests atomic.Int32
+	var refreshes, requests, writes atomic.Int32
 	var reject, expired atomic.Bool
 	var srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -106,7 +107,17 @@ func TestTransportRefreshLifecycle(t *testing.T) {
 	tr.Endpoints = Endpoints{Issuer: srv.URL, BaseURL: srv.URL}
 	client := &http.Client{Transport: tr}
 	do := func() error {
-		r, err := client.Post(srv.URL+"/responses", "application/json", strings.NewReader(`{"input":[]}`))
+		ctx := httptrace.WithClientTrace(t.Context(), &httptrace.ClientTrace{WroteRequest: func(info httptrace.WroteRequestInfo) {
+			if info.Err == nil {
+				writes.Add(1)
+			}
+		}})
+		req, err := http.NewRequestWithContext(ctx, "POST", srv.URL+"/responses", strings.NewReader(`{"input":[]}`))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		r, err := client.Do(req)
 		if r != nil {
 			_ = r.Body.Close()
 		}
@@ -142,6 +153,9 @@ func TestTransportRefreshLifecycle(t *testing.T) {
 	saved, _, _ = s.Get("cg")
 	if saved.AccessToken != "" || saved.RefreshToken != "" || saved.ClientID != tok.ClientID {
 		t.Fatal("terminal refresh did not retain only registration")
+	}
+	if writes.Load() != requests.Load() {
+		t.Fatalf("inference trace counted auth requests: writes=%d inference=%d refresh=%d", writes.Load(), requests.Load(), refreshes.Load())
 	}
 }
 

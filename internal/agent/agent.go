@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -208,8 +209,25 @@ func (a *Agent) prompt() fantasy.Prompt {
 // assistant message parts in arrival order.
 func (a *Agent) stream(ctx context.Context, emit func(Event)) (turnResult, error) {
 	start := time.Now()
+	// HTTP trace callbacks can run on transport goroutines. Preserve the
+	// event stream's serial contract, including cancellation during a write.
+	var eventMu sync.Mutex
+	active := true
+	sink := emit
+	emit = func(e Event) {
+		eventMu.Lock()
+		defer eventMu.Unlock()
+		if active {
+			sink(e)
+		}
+	}
+	defer func() {
+		eventMu.Lock()
+		active = false
+		eventMu.Unlock()
+	}()
 	var timing RequestTiming
-	ctx, networkTiming := traceRequest(ctx, start)
+	ctx, networkTiming := traceRequest(ctx, start, func(at time.Time) { emit(RequestSent{At: at}) })
 	defer func() {
 		timing.Total = time.Since(start)
 		timing.Dispatch, timing.Connection = networkTiming()
@@ -263,7 +281,11 @@ func (a *Agent) stream(ctx context.Context, emit func(Event)) (turnResult, error
 			}
 			b.text.WriteString(part.Delta)
 			if part.Delta != "" {
-				emit(TextDelta{Text: part.Delta})
+				at := time.Now()
+				if timing.FirstText == 0 {
+					timing.FirstText = at.Sub(start)
+				}
+				emit(TextDelta{Text: part.Delta, At: at})
 			}
 		case fantasy.StreamPartTypeTextEnd:
 			if b, ok := texts[part.ID]; ok {

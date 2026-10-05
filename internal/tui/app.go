@@ -250,6 +250,7 @@ type model struct {
 	usageOut       int64
 	startedAt      time.Time
 	requestTimings []agent.RequestTiming
+	responseTiming responseTiming
 	requestStart   int
 	retryUntil     time.Time
 	retryAttempt   int
@@ -499,6 +500,10 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 		m.running = false
 		m.cancel = nil
 		m.step = 0
+		if msg.err == nil && !m.responseTiming.firstText.IsZero() {
+			m.appendSystem(m.responseTiming.footer(time.Now(), false))
+		}
+		m.responseTiming = responseTiming{}
 		m.saveConv()
 		var paused *agent.PausedError
 		if errors.As(msg.err, &paused) {
@@ -699,6 +704,7 @@ func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	case "enter":
+		sentAt := time.Now()
 		text := strings.TrimSpace(m.input.Value())
 		if m.editingPrompt != nil {
 			if text != "" || len(m.attachments) != 0 {
@@ -742,7 +748,7 @@ func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		files := m.fileParts()
 		m.attachments = nil
 		m.resizeInput()
-		return m, m.submit(text, files)
+		return m, m.submitAt(text, files, sentAt)
 	case "up":
 		if m.input.Line() == 0 {
 			if text, ok := m.hist.prev(m.input.Value()); ok {
@@ -890,6 +896,10 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 
 // submit sends text (plus any image parts) as the next user turn.
 func (m *model) submit(text string, files []fantasy.FilePart) tea.Cmd {
+	return m.submitAt(text, files, time.Now())
+}
+
+func (m *model) submitAt(text string, files []fantasy.FilePart, sentAt time.Time) tea.Cmd {
 	if m.sess.Agent == nil {
 		m.appendSystem("no model connected — /models to add one")
 		m.refresh()
@@ -906,7 +916,7 @@ func (m *model) submit(text string, files []fantasy.FilePart) tea.Cmd {
 	b := userBlock(text, attachmentNames(files))
 	b.prompt = m.conv.Checkpoint(m.sess.Agent.Messages(), text, msg, m.sess.Name)
 	m.blocks = append(m.blocks, b)
-	return m.startRun(func(ctx context.Context, ag *agent.Agent, emit func(agent.Event)) error {
+	return m.startRunAt(sentAt, func(ctx context.Context, ag *agent.Agent, emit func(agent.Event)) error {
 		return ag.RunMessage(ctx, msg, emit)
 	})
 }
@@ -952,6 +962,10 @@ func (m *model) prepareAgent() error {
 // startRun marks the model busy and runs fn in the background, folding its
 // events per frame. runDoneMsg carries the result.
 func (m *model) startRun(fn func(context.Context, *agent.Agent, func(agent.Event)) error) tea.Cmd {
+	return m.startRunAt(time.Now(), fn)
+}
+
+func (m *model) startRunAt(sentAt time.Time, fn func(context.Context, *agent.Agent, func(agent.Event)) error) tea.Cmd {
 	if err := m.prepareAgent(); err != nil {
 		m.appendSystem(err.Error())
 		m.refresh()
@@ -963,7 +977,8 @@ func (m *model) startRun(fn func(context.Context, *agent.Agent, func(agent.Event
 	m.rollPaused = time.Time{}
 	m.running = true
 	m.paused = false
-	m.startedAt = time.Now()
+	m.startedAt = sentAt
+	m.responseTiming = responseTiming{start: sentAt}
 	m.requestTimings, m.runDuration = nil, 0
 	m.runGen++
 	m.frame, m.step = 0, 0
@@ -1012,6 +1027,7 @@ func (m *model) cancelRun() {
 }
 
 func (m *model) applyEvent(e agent.Event) {
+	m.responseTiming.observe(e)
 	switch e := e.(type) {
 	case agent.RetryWait:
 		m.retryUntil, m.retryAttempt = e.Until, e.Attempt
@@ -1459,6 +1475,12 @@ func (m *model) renderBlocks(width int) []string {
 	}
 	if m.running && !m.compacting && m.activity() != "" {
 		lines = append(lines, "", "  "+m.workingStrip(inner))
+	}
+	if m.running && !m.responseTiming.start.IsZero() {
+		// Use the ordinary muted block renderer so narrow terminals wrap the
+		// three measurements rather than truncating the final counter.
+		b := newBlock(blockSystem, m.responseTiming.footer(time.Now(), true))
+		lines = append(lines, m.blockLines(b, inner, false)...)
 	}
 	// Shorter transcripts must release hidden backing-array references too.
 	if len(lines) < len(m.lineBuf) {

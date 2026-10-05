@@ -45,7 +45,7 @@ func TestWorkingStripFollowsTheRun(t *testing.T) {
 		t.Fatalf("startRun: cmd=%v running=%v gen=%d", cmd != nil, m.running, m.runGen)
 	}
 	plain := ansi.Strip(strings.Join(m.renderBlocks(100), "\n"))
-	if !strings.HasSuffix(plain, loader(m.frame)+"  thinking…") {
+	if !strings.Contains(plain, loader(m.frame)+"  thinking…\n") || !strings.Contains(plain, "LLM first text pending") {
 		t.Fatalf("strip while waiting for the model:\n%s", plain)
 	}
 
@@ -55,7 +55,8 @@ func TestWorkingStripFollowsTheRun(t *testing.T) {
 	)
 	m.startedAt = time.Now().Add(-12 * time.Second)
 	plain = ansi.Strip(strings.Join(m.renderBlocks(100), "\n"))
-	last := plain[strings.LastIndex(plain, "\n")+1:]
+	beforeTiming, _, _ := strings.Cut(plain, "\n  First text")
+	last := beforeTiming[strings.LastIndex(beforeTiming, "\n")+1:]
 	if !strings.HasPrefix(last, "  "+loader(m.frame)+" edit src/app.go") || !strings.Contains(last, "12s") || strings.Count(plain, "src/app.go") != 1 || strings.Count(plain, loader(m.frame)) != 1 {
 		t.Fatalf("strip for a running edit = %q", last)
 	}

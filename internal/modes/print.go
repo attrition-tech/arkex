@@ -113,6 +113,8 @@ func eventName(e agent.Event) string {
 		return "reasoning_time"
 	case agent.RequestTiming:
 		return "request_timing"
+	case agent.RequestSent:
+		return "request_sent"
 	case agent.ToolCallStart:
 		return "tool_call_start"
 	case agent.ToolCallInputDelta:

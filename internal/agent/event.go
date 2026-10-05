@@ -19,7 +19,8 @@ type TurnStart struct {
 
 // TextDelta is a chunk of assistant text.
 type TextDelta struct {
-	Text string `json:"text"`
+	Text string    `json:"text"`
+	At   time.Time `json:"at,omitzero"` // local receipt, before UI batching/painting
 }
 
 // ReasoningDelta is a chunk of model reasoning/thinking text.

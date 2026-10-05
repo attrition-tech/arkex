@@ -297,6 +297,9 @@ func TestRewriteResponses(t *testing.T) {
 	if ns["type"] != "namespace" || ns["name"] != "arkex" || ns["tools"].([]any)[0].(map[string]any)["name"] != "read" {
 		t.Fatal("tool namespace wrong")
 	}
+	if description, ok := ns["description"].(string); !ok || strings.TrimSpace(description) == "" {
+		t.Fatal("tool namespace is missing its required description")
+	}
 	inc := m["include"].([]any)
 	if len(inc) != 2 || inc[0] != "x" || inc[1] != "reasoning.encrypted_content" {
 		t.Fatal("include lost")

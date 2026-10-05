@@ -30,6 +30,12 @@ class ChatGPTHandler(Handler):
         assert "previous_response_id" not in body and "max_output_tokens" not in body
         namespace = body["tools"][0]
         assert namespace["type"] == "namespace" and namespace["name"] == "arkex"
+        if not isinstance(namespace.get("description"), str) or not namespace["description"].strip():
+            self.send_json(400, {"error": {
+                "message": "Missing required parameter: 'tools[0].description'.",
+                "type": "invalid_request_error", "param": "tools[0].description",
+                "code": "missing_required_parameter"}})
+            return
         assert "read" in [tool["name"] for tool in namespace["tools"]]
         history = body["input"]
         user = next(item for item in history if item.get("role") == "user")

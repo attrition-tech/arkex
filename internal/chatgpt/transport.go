@@ -261,7 +261,11 @@ func rewriteResponses(body []byte) []byte {
 			}
 		}
 		if len(local) > 0 {
-			m["tools"] = append(other, map[string]any{"type": "namespace", "name": "arkex", "tools": local})
+			m["tools"] = append(other, map[string]any{
+				"type": "namespace", "name": "arkex",
+				"description": "Tools executed by arkex to inspect files, make changes, and run commands in the user's workspace.",
+				"tools":       local,
+			})
 		}
 	}
 	inc, _ := m["include"].([]any)

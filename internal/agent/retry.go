@@ -88,6 +88,13 @@ func retryableRequestError(err error) bool {
 	if errors.As(err, &dns) && dns.IsTemporary {
 		return true
 	}
+	// Go exposes this TCP TLS alert only through net.OpError, not an
+	// exported sentinel. Retry the failed connection, never relax TLS checks
+	// or treat other TLS errors (especially certificate failures) as transient.
+	var op *net.OpError
+	if errors.As(err, &op) && op.Op == "local error" && op.Err != nil && op.Err.Error() == "tls: bad record MAC" {
+		return true
+	}
 	for _, transient := range []error{io.EOF, io.ErrUnexpectedEOF, syscall.ECONNRESET,
 		syscall.ECONNABORTED, syscall.ECONNREFUSED, syscall.EPIPE,
 		syscall.ENETDOWN, syscall.ENETUNREACH, syscall.EHOSTUNREACH, syscall.ETIMEDOUT} {

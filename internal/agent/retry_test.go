@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -40,6 +41,11 @@ func TestRetryableNetworkErrors(t *testing.T) {
 		{"temporary DNS", &net.DNSError{IsTemporary: true}, true},
 		{"unknown hostname", &net.DNSError{IsNotFound: true}, false},
 		{"TLS certificate", &url.Error{Op: "Post", Err: x509.UnknownAuthorityError{}}, false},
+		{"TLS record", &net.OpError{Op: "local error", Err: errors.New("tls: bad record MAC")}, true},
+		{"wrapped TLS record", &fantasy.ProviderError{Cause: &url.Error{Op: "Post", Err: &net.OpError{Op: "local error", Err: errors.New("tls: bad record MAC")}}}, true},
+		{"other TLS alert", &net.OpError{Op: "local error", Err: errors.New("tls: protocol version not supported")}, false},
+		{"remote TLS alert", &net.OpError{Op: "remote error", Err: errors.New("tls: bad record MAC")}, false},
+		{"TLS text without transport error", errors.New("local error: tls: bad record MAC"), false},
 		{"user cancel", context.Canceled, false},
 		{"bad request with EOF cause", &fantasy.ProviderError{StatusCode: 400, Cause: io.EOF}, false},
 		{"auth", &fantasy.ProviderError{AuthError: true, Cause: io.EOF}, false},
@@ -49,6 +55,89 @@ func TestRetryableNetworkErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := retryableRequestError(tc.err); got != tc.want {
 				t.Fatalf("retryable=%v want %v: %v", got, tc.want, tc.err)
+			}
+		})
+	}
+}
+
+func TestTLSRecordFailureRecovery(t *testing.T) {
+	for _, stage := range []string{"empty stream", "partial stream", "declined retry"} {
+		t.Run(stage, func(t *testing.T) {
+			t.Parallel()
+			partial := stage != "empty stream"
+			var requests atomic.Int32
+			addresses := make(chan string, 2)
+			srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.Copy(io.Discard, r.Body)
+				addresses <- r.RemoteAddr
+				w.Header().Set("Content-Type", "text/event-stream")
+				if requests.Add(1) != 1 {
+					sse(w, delta(`{"content":"RECOVERED"}`, ""), delta(`{}`, "stop"))
+					return
+				}
+				// Deliver headers through verified TLS before corrupting the body,
+				// so the real SSE reader (not an SDK request retry) sees the error.
+				_, _ = fmt.Fprintf(w, "data: %s\n\n", delta(`{"role":"assistant"}`, ""))
+				if partial {
+					_, _ = fmt.Fprintf(w, "data: %s\n\ndata: %s\n\n", delta(`{"content":"UNFINISHED"}`, ""),
+						delta(`{"tool_calls":[{"index":0,"id":"c1","type":"function","function":{"name":"write","arguments":"{\"path\":\"pending\",\"content\":\"BAD\"}"}}]}`, ""))
+				}
+				w.(http.Flusher).Flush()
+				conn, _, err := w.(http.Hijacker).Hijack()
+				if err != nil {
+					t.Error(err)
+					return
+				}
+				wire := conn.(*tls.Conn).NetConn()
+				defer func() { _ = wire.Close() }()
+				// An application-data record with an invalid authentication tag.
+				// Inject into the TCP stream after the handshake, not into plaintext.
+				record := append([]byte{23, 3, 3, 0, 32}, make([]byte, 32)...)
+				if _, err := wire.Write(record); err != nil {
+					t.Error(err)
+				}
+			}))
+			srv.TLS = &tls.Config{MinVersion: tls.VersionTLS12, MaxVersion: tls.VersionTLS12}
+			srv.StartTLS()
+			defer srv.Close()
+			client := srv.Client() // trusts this server's certificate; verification stays enabled
+			if client.Transport.(*http.Transport).TLSClientConfig.InsecureSkipVerify {
+				t.Fatal("fixture bypasses TLS verification")
+			}
+			lm, err := provider.Open(t.Context(), config.ModelRef{Conn: config.Connection{API: config.APIOpenAICompat, BaseURL: srv.URL}, Model: config.Model{ID: "test"}}, client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir := t.TempDir()
+			a := &Agent{Model: lm, Tools: tools.Default(dir), Policy: AllowAll{}}
+			prompts := 0
+			a.Retry = func(_ context.Context, err error, gotPartial bool) bool {
+				prompts++
+				var op *net.OpError
+				if !gotPartial || !errors.As(err, &op) || op.Op != "local error" || op.Err.Error() != "tls: bad record MAC" {
+					t.Errorf("wrong interruption: partial=%v err=%v", gotPartial, err)
+				}
+				return stage != "declined retry"
+			}
+			err = a.Run(t.Context(), "hi", func(Event) {})
+			if _, statErr := os.Stat(filepath.Join(dir, "pending")); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("tool from corrupted response executed: %v", statErr)
+			}
+			if stage == "declined retry" {
+				if !errors.Is(err, context.Canceled) || requests.Load() != 1 || prompts != 1 || len(a.Messages()) != 1 {
+					t.Fatalf("declined retry: err=%v requests=%d prompts=%d messages=%v", err, requests.Load(), prompts, a.Messages())
+				}
+				return
+			}
+			if err != nil || requests.Load() != 2 || (partial && prompts != 1) || (!partial && prompts != 0) {
+				t.Fatalf("recovery: err=%v requests=%d prompts=%d", err, requests.Load(), prompts)
+			}
+			if first, second := <-addresses, <-addresses; first == second {
+				t.Fatal("retry reused the corrupted TLS connection")
+			}
+			msgs := a.Messages()
+			if len(msgs) != 2 || len(msgs[1].Content) != 1 || msgs[1].Content[0].(fantasy.TextPart).Text != "RECOVERED" {
+				t.Fatalf("interrupted response entered conversation: %v", msgs)
 			}
 		})
 	}

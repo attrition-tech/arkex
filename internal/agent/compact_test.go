@@ -142,15 +142,40 @@ func TestCompactChunksCoverAllHistoryIncludingRetry(t *testing.T) {
 	}
 }
 
+func TestCompactShortensCompleteSummary(t *testing.T) {
+	a, lm, s := compactAgent(t, 8192)
+	before := []fantasy.Message{fantasy.NewUserMessage("AZ-719: local changes only, no publication. " + strings.Repeat("earlier work ", 500))}
+	a.SetMessages(before)
+	lm.respond = func(_ context.Context, _ fantasy.Call, n int) (fantasy.StreamResponse, error) {
+		if n == 1 {
+			// Complete, below the stream-size guard, but over the 2048-byte
+			// replacement budget. A provider token cap does not enforce bytes.
+			return summaryResponse(strings.Repeat("Earlier work remains pending. ", 100), fantasy.FinishReasonStop), nil
+		}
+		return summaryResponse("AZ-719: local changes only; publication is not authorized; verification remains pending.", fantasy.FinishReasonStop), nil
+	}
+	res, err := a.Compact(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Summary, "AZ-719: local changes only; publication is not authorized") || res.Usage.InputTokens != 34 || res.Usage.OutputTokens != 18 {
+		t.Fatalf("shortened handoff or retry usage lost: %+v", res)
+	}
+	loaded, err := session.Load(s.Cwd, s.ID)
+	if err != nil || !reflect.DeepEqual(loaded.History[:len(before)], before) || !reflect.DeepEqual(loaded.Messages, a.Messages()) {
+		t.Fatal("shortening lost original history or durable replacement", err)
+	}
+}
+
 func TestCompactRejectsBadResponsesWithoutReplacingHistory(t *testing.T) {
-	for _, kind := range []string{"length", "empty", "missing finish", "error", "oversized", "tool call", "cancel"} {
+	for _, kind := range []string{"length", "empty", "missing finish", "error", "oversized", "summary budget", "tool call", "cancel", "cancel shortening"} {
 		t.Run(kind, func(t *testing.T) {
 			a, lm, s := compactAgent(t, 8192)
 			before := []fantasy.Message{textMsg(fantasy.MessageRoleUser, 16000)}
 			a.SetMessages(before)
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			lm.respond = func(context.Context, fantasy.Call, int) (fantasy.StreamResponse, error) {
+			lm.respond = func(_ context.Context, _ fantasy.Call, n int) (fantasy.StreamResponse, error) {
 				switch kind {
 				case "length":
 					return summaryResponse("partial text", fantasy.FinishReasonLength), nil
@@ -160,6 +185,14 @@ func TestCompactRejectsBadResponsesWithoutReplacingHistory(t *testing.T) {
 					return nil, errors.New("connection failed")
 				case "oversized":
 					return summaryResponse(strings.Repeat("x", 9000), fantasy.FinishReasonStop), nil
+				case "summary budget":
+					return summaryResponse(strings.Repeat("x", 2049), fantasy.FinishReasonStop), nil
+				case "cancel shortening":
+					if n == 1 {
+						return summaryResponse(strings.Repeat("x", 3000), fantasy.FinishReasonStop), nil
+					}
+					cancel()
+					return nil, ctx.Err()
 				case "cancel":
 					cancel()
 					return summaryResponse("complete but canceled", fantasy.FinishReasonStop), nil
@@ -174,6 +207,12 @@ func TestCompactRejectsBadResponsesWithoutReplacingHistory(t *testing.T) {
 			_, err := a.Compact(ctx)
 			if err == nil || !reflect.DeepEqual(a.Messages(), before) {
 				t.Fatalf("accepted %s: %v", kind, err)
+			}
+			if kind == "cancel shortening" && !errors.Is(err, context.Canceled) {
+				t.Fatalf("shortening cancellation lost: %v", err)
+			}
+			if len(lm.calls) > 2 {
+				t.Fatal("unbounded shortening attempts")
 			}
 			loaded, err := session.Load(s.Cwd, s.ID)
 			if err != nil || !reflect.DeepEqual(loaded.Messages, before) {
@@ -241,13 +280,18 @@ func TestCompactDeadlineAndRequestLimit(t *testing.T) {
 	if _, err := a.Compact(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatal(err)
 	}
-	lm.calls = nil
-	lm.respond = func(context.Context, fantasy.Call, int) (fantasy.StreamResponse, error) {
-		return summaryResponse("S", fantasy.FinishReasonStop), nil
-	}
-	a.SetMessages([]fantasy.Message{textMsg(fantasy.MessageRoleUser, 200000)})
-	if _, err := a.Compact(t.Context()); err == nil || !strings.Contains(err.Error(), "request limit") || len(lm.calls) != compactMaxRequests {
-		t.Fatalf("unbounded chunks: %d %v", len(lm.calls), err)
+	for _, shorten := range []bool{false, true} {
+		lm.calls = nil
+		lm.respond = func(_ context.Context, _ fantasy.Call, n int) (fantasy.StreamResponse, error) {
+			if shorten && n%2 == 1 {
+				return summaryResponse(strings.Repeat("x", 1500), fantasy.FinishReasonStop), nil
+			}
+			return summaryResponse("S", fantasy.FinishReasonStop), nil
+		}
+		a.SetMessages([]fantasy.Message{textMsg(fantasy.MessageRoleUser, 200000)})
+		if _, err := a.Compact(t.Context()); err == nil || !strings.Contains(err.Error(), "request limit") || len(lm.calls) != compactMaxRequests {
+			t.Fatalf("unbounded chunks (shortening=%v): %d %v", shorten, len(lm.calls), err)
+		}
 	}
 }
 
@@ -333,9 +377,19 @@ func TestCancelDuringOverflowRecoveryPreservesCancellation(t *testing.T) {
 }
 
 func TestContextErrorsAndSummaryRecognition(t *testing.T) {
-	for _, err := range []error{context.DeadlineExceeded, context.Canceled, errors.New("rate limit exceeded"), nil} {
+	for _, err := range []error{
+		context.DeadlineExceeded, context.Canceled, errors.New("rate limit exceeded"), nil,
+		fmt.Errorf("compaction stopped; original context preserved: %w", errors.New("summary exceeds the replacement budget")),
+		fmt.Errorf("compaction stopped; original context preserved: %w", errors.New("rate limit exceeded")),
+		fmt.Errorf("compaction stopped; original context preserved: %w", errors.Join(errors.New("summary exceeds the replacement budget"), errors.New("rate limit exceeded"))),
+	} {
 		if IsContextOverflow(err) {
 			t.Fatal("misclassified overflow", err)
+		}
+	}
+	for _, cause := range []error{errors.New("maximum context length is 8192 tokens"), errors.New("prompt is too long for this model")} {
+		if !IsContextOverflow(fmt.Errorf("compaction stopped; original context preserved: %w", cause)) || !IsContextOverflow(errors.Join(cause, errors.New("summary exceeds the replacement budget"))) {
+			t.Fatal("wrapped provider overflow not recognized", cause)
 		}
 	}
 	for msg, want := range map[string]int{

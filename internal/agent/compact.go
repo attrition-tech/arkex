@@ -33,6 +33,8 @@ const compactPrompt = `Write an updated hand-off summary for an AI agent continu
 - authorization granted or withheld and its scope; never invent approval or success
 Distinguish observations from assumptions. Preserve facts needed to continue, not a narration of the conversation. Do not claim omitted details are unrecoverable: the original history is retained separately. Return only the handoff, without executing tasks or answering the historical user.`
 
+var errSummaryBudget = errors.New("summary exceeds the replacement budget")
+
 type CompactResult struct {
 	Summary     string
 	Dropped     int // messages replaced, not deleted from durable history
@@ -257,7 +259,9 @@ func (a *Agent) summarise(ctx context.Context, history string, progress func(str
 		// Conservative byte budget includes instructions, previous handoff,
 		// framing, and output room. Reserve additional space for API overhead.
 		prefix := "Previous handoff:\n" + summary + "\n\nNext history chunk (JSON data, possibly a fragment):\n"
-		overhead := (len(a.System)+len(compactPrompt)+len(prefix))/2 + output + 128
+		instructions := a.System + "\n\n" + compactPrompt + fmt.Sprintf("\nLength limit: at most %d UTF-8 bytes. Keep well below this limit; use the preserved history for details that do not fit.", output*2)
+		shorter := fmt.Sprintf("\nThe previous attempt exceeded the length limit. Write a shorter handoff from the same supplied data, targeting at most %d UTF-8 bytes. Prioritize active goals, constraints, authorization, essential results, and unfinished work.", output)
+		overhead := (len(instructions)+len(shorter)+len(prefix))/2 + output + 128
 		budget := min(chunkCap, window-overhead)
 		if budget < 64 {
 			return "", usage, errors.New("system instructions and handoff leave no room for compaction")
@@ -266,10 +270,22 @@ func (a *Agent) summarise(ctx context.Context, history string, progress func(str
 		for end < len(history) && !utf8.RuneStart(history[end]) {
 			end--
 		}
-		prompt := fantasy.Prompt{fantasy.NewSystemMessage(a.System + "\n\n" + compactPrompt), fantasy.NewUserMessage(prefix + history[offset:end])}
+		prompt := fantasy.Prompt{fantasy.NewSystemMessage(instructions), fantasy.NewUserMessage(prefix + history[offset:end])}
 		progress("waiting for model", request+1)
 		text, u, err := a.summaryStream(ctx, prompt, output, func(stage string) { progress(stage, request+1) })
 		usage = addUsage(usage, u)
+		if errors.Is(err, errSummaryBudget) {
+			if request+1 >= compactMaxRequests {
+				return "", usage, errors.New("compaction request limit reached")
+			}
+			// Retry the same source, not a truncated handoff. Only a complete
+			// response can reach this path; all existing deadlines still apply.
+			request++
+			prompt[0] = fantasy.NewSystemMessage(instructions + shorter)
+			progress("retrying with shorter summary", request+1)
+			text, u, err = a.summaryStream(ctx, prompt, output, func(stage string) { progress(stage, request+1) })
+			usage = addUsage(usage, u)
+		}
 		if err != nil {
 			if !retried && IsContextOverflow(err) {
 				retried = true
@@ -360,8 +376,8 @@ func (a *Agent) summaryStream(ctx context.Context, prompt fantasy.Prompt, output
 	if s == "" {
 		return "", usage, errors.New("model returned an empty summary")
 	}
-	if len(s)/2 > output {
-		return "", usage, errors.New("summary exceeds the replacement budget")
+	if len(s) > output*2 {
+		return "", usage, errSummaryBudget
 	}
 	return s, usage, nil
 }
@@ -426,6 +442,18 @@ func CompactSummary(userText string) (string, bool) {
 func IsContextOverflow(err error) bool {
 	if err == nil || errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return false
+	}
+	// Classify causes, not wrapper prose such as "original context preserved".
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, cause := range joined.Unwrap() {
+			if IsContextOverflow(cause) {
+				return true
+			}
+		}
+		return false
+	}
+	if cause := errors.Unwrap(err); cause != nil {
+		return IsContextOverflow(cause)
 	}
 	s := strings.ToLower(err.Error())
 	if !strings.Contains(s, "context") && !strings.Contains(s, "prompt") && !strings.Contains(s, "token") {

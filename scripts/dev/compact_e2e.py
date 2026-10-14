@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Compaction through the real TUI/HTTP adapter, using disposable local sessions.
-Usage: python3 scripts/dev/compact_e2e.py /tmp/arkex /tmp/compact-captures
+Usage: python3 scripts/dev/compact_e2e.py /tmp/arkex /tmp/compact-captures [cases...]
 No credentials or external model calls. Captures retain terminal ANSI for shot tooling.
 """
 import json
@@ -19,6 +19,7 @@ captures = Path(sys.argv[2]).resolve()
 captures.mkdir(parents=True, exist_ok=True)
 socket = "arkex-compact-" + str(os.getpid())
 release = threading.Event()
+shortening = threading.Event()
 requests = []
 mode = "success"
 
@@ -33,10 +34,24 @@ class Handler(BaseHTTPRequestHandler):
         summary = "Write an updated hand-off summary" in str(body.get("messages", []))
         if summary:
             assert body["stream"] and not body.get("tools")
+            number = sum("Write an updated hand-off summary" in str(r.get("messages", [])) for r in requests)
             release.wait(20)
             text, finish, tokens = "The user requested local work. No publication is authorized.", "stop", 500
             if mode == "length":
                 text, finish = "This summary was cut short", "length"
+            if mode == "overflow" and number == 1:
+                self.send_response(400)
+                self.send_header("content-type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps({"error": {"message": "maximum context length is 16000 tokens; prompt too long", "type": "invalid_request_error", "code": "context_length_exceeded"}}).encode())
+                return
+            if mode in ("oversized", "refuses", "cancel-shortening"):
+                if number == 1 or mode == "refuses":
+                    # Complete and within the stream guard, but over the 4000-byte
+                    # handoff budget. This is the reported failure, not truncation.
+                    text = "Original decision AZ-719; local changes only; no publication authorized. " * 100
+                if number == 2:
+                    shortening.wait(20)
         else:
             compacted = "Original conversation history:" in str(body.get("messages", []))
             text = "CONTINUED_AFTER_COMPACTION" if compacted else ("Recorded evidence. " * 400 + "\nOriginal decision AZ-719 is recorded; tests remain pending.")
@@ -87,11 +102,12 @@ server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
 thread = threading.Thread(target=server.serve_forever, daemon=True)
 thread.start()
 try:
-    for mode in ("success", "length", "cancel"):
+    for mode in sys.argv[3:] or ("success", "length", "cancel", "oversized", "refuses", "cancel-shortening", "overflow"):
         with tempfile.TemporaryDirectory(prefix="arkex-compact-") as temp:
             home = Path(temp)
             requests.clear()
             release.clear()
+            shortening.clear()
             config = {"version": 2, "connections": {"fake": {"kind": "llm-server", "api": "openai-compat",
                       "baseUrl": f"http://127.0.0.1:{server.server_port}/v1", "apiKey": "test",
                       "models": [{"id": "m", "contextWindow": 16000}]}}, "default": "fake/m"}
@@ -109,6 +125,7 @@ try:
                 capture(mode + "-waiting")
                 session_path = next((home / "sessions").glob("*/*.json"))
                 saved = json.loads(session_path.read_text())
+                saved_before = saved["messages"]
                 assert "Continue from that decision" in json.dumps(saved["messages"]), "current prompt not saved before summary"
                 if mode == "cancel":
                     tmux("send-keys", "-t", "test", "Escape")
@@ -116,17 +133,32 @@ try:
                     tmux("send-keys", "-t", "test", "Escape")
                     wait(lambda s: "cancelled" in s and "waiting for model" not in s, "cancel stuck")
                 release.set()
-                if mode == "success":
+                if mode in ("oversized", "refuses", "cancel-shortening"):
+                    text = wait(lambda s: "retrying with shorter summary" in s or "summary exceeds the replacement budget" in s, "shortening phase not visible")
+                    capture(mode + "-shortening")
+                    assert "retrying with shorter summary" in text, "complete oversized handoff was rejected without recovery\n" + text
+                    if mode == "cancel-shortening":
+                        tmux("send-keys", "-t", "test", "Escape")
+                        wait(lambda s: "Press Esc again" in s, "shortening cancel confirmation")
+                        tmux("send-keys", "-t", "test", "Escape")
+                        wait(lambda s: "cancelled" in s and "retrying with shorter summary" not in s, "shortening cancel stuck")
+                    shortening.set()
+                if mode in ("success", "oversized", "overflow"):
                     wait(lambda s: "CONTINUED_AFTER_COMPACTION" in s, "continuation failed")
                 elif mode == "length":
                     wait(lambda s: "summary incomplete" in s, "truncated summary accepted")
+                elif mode == "refuses":
+                    text = wait(lambda s: "summary exceeds the replacement budget" in s, "unbounded shortening")
+                    assert "the conversation still does not fit" not in text, "internal budget failure misclassified as provider overflow"
                 time.sleep(.3)
                 capture(mode + "-done")
                 saved = json.loads(session_path.read_text())
                 assert "AZ-719" in json.dumps(saved["history"]), "original history lost"
-                if mode == "success":
+                if mode in ("success", "oversized", "overflow"):
                     assert "Original conversation history:" in json.dumps(saved["messages"])
-                    assert len(requests) == 3, len(requests)
+                    assert len(requests) == (3 if mode == "success" else 4), len(requests)
+                    if mode == "oversized":
+                        assert requests[1]["messages"][-1] == requests[2]["messages"][-1], "shortening skipped source history"
                     assert requests[-1]["messages"][-1]["content"] == "Continue from that decision."
                     # Restart the actual CLI with its saved context, not a hand-built fixture.
                     env = dict(os.environ, ARKEX_HOME=temp)
@@ -135,10 +167,12 @@ try:
                     assert result.returncode == 0 and "CONTINUED_AFTER_COMPACTION" in result.stdout, result.stderr
                 else:
                     assert "Original conversation history:" not in json.dumps(saved["messages"])
-                    assert len(requests) == 2, "failed compaction sent another request"
+                    assert saved["messages"] == saved_before, "failed compaction changed active context"
+                    assert len(requests) == (3 if mode in ("refuses", "cancel-shortening") else 2), "failed compaction sent another request"
                 print(f"PASS {mode}: real TUI, phase visible, saved original, replacement/continuation checked", flush=True)
             finally:
                 release.set()
+                shortening.set()
                 subprocess.run(["tmux", "-L", socket, "kill-server"], capture_output=True)
     print("ALL COMPACTION E2E CHECKS PASSED")
 finally:

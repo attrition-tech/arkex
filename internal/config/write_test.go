@@ -1,10 +1,12 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 )
@@ -199,5 +201,69 @@ func TestUpdateConnectionRename(t *testing.T) {
 	must(UpdateConnection(path, "new", "new", conn, "new/a"))
 	if err := UpdateConnection(path, "missing", "z", conn, ""); err == nil {
 		t.Error("renaming an unknown connection succeeded")
+	}
+}
+
+func TestSaveCheckedReasoningPreservesMetadataAndRejectsStale(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	t.Setenv("ARKEX_HOME", filepath.Dir(path))
+	data := []byte(`{"version":4,"default":"server/b","profiles":{"fast":{"model":"server/b"}},"connections":{"server":{"kind":"llm-server","api":"openai-compat","baseUrl":"https://example.com/v1","futureConnectionKey":true,"models":[{"id":"a","contextWindow":10000,"compat":{"extraBody":{"temperature":0.2},"futureCompatKey":true},"futureModelKey":"keep"},{"id":"b","reasoningLevels":["high"]}]}}}`)
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := cfg.Resolve("server/a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := ref.Model
+	checked.ReasoningLevels = []string{"low", "max"}
+	checked.Compat.Thinking = ThinkingReasoningEffort
+	if err := SaveCheckedReasoning(path, ref, checked); err != nil {
+		t.Fatal(err)
+	}
+	after, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Default != cfg.Default || !reflect.DeepEqual(after.Profiles, cfg.Profiles) || !reflect.DeepEqual(after.Connections["server"].Models[1], cfg.Connections["server"].Models[1]) {
+		t.Fatal("checked reasoning changed the default, profiles or sibling")
+	}
+	got := after.Connections["server"].Models[0]
+	if !got.ReasoningChecked || !reflect.DeepEqual(got.ReasoningLevels, []string{"low", "max"}) || got.ContextWindow != 10000 || got.Compat.ExtraBody["temperature"] != .2 {
+		t.Fatalf("wrong checked metadata: %+v", got)
+	}
+	// Learning a context limit does not change the request controls and must
+	// neither block saving nor get overwritten by the older model snapshot.
+	fresh, err := after.Resolve("server/a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := SetContextWindow(path, "server", "a", 16000); err != nil {
+		t.Fatal(err)
+	}
+	if err := SaveCheckedReasoning(path, fresh, fresh.Model); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := Load("")
+	if err != nil || updated.Connections["server"].Models[0].ContextWindow != 16000 {
+		t.Fatalf("checked controls replaced a learned limit: %v", err)
+	}
+	data, _ = os.ReadFile(path)
+	for _, preserved := range []string{"futureConnectionKey", "futureCompatKey", "futureModelKey"} {
+		if !bytes.Contains(data, []byte(preserved)) {
+			t.Fatalf("unknown key %s lost", preserved)
+		}
+	}
+	// The original snapshot must not overwrite controls saved since its check.
+	if err := SaveCheckedReasoning(path, ref, checked); err == nil {
+		t.Fatal("stale checked settings were saved")
+	}
+	unchanged, _ := os.ReadFile(path)
+	if !bytes.Equal(data, unchanged) {
+		t.Fatal("stale check modified config")
 	}
 }

@@ -111,10 +111,13 @@ type Model struct {
 	// "on" only when supported. Empty means capabilities are unknown.
 	ReasoningLevels  []string `json:"reasoningLevels,omitempty"`
 	ReasoningDefault string   `json:"reasoningDefault,omitempty"`
-	ContextWindow    int      `json:"contextWindow,omitempty"`
-	MaxTokens        int      `json:"maxTokens,omitempty"`
-	Cost             *Cost    `json:"cost,omitempty"`
-	Compat           Compat   `json:"compat,omitempty"`
+	// ReasoningChecked distinguishes an opt-in request-validation check
+	// from manual/catalog metadata. It does not verify model behavior.
+	ReasoningChecked bool   `json:"reasoningChecked,omitempty"`
+	ContextWindow    int    `json:"contextWindow,omitempty"`
+	MaxTokens        int    `json:"maxTokens,omitempty"`
+	Cost             *Cost  `json:"cost,omitempty"`
+	Compat           Compat `json:"compat,omitempty"`
 	// Disabled keeps the entry in the file but hides it from selection.
 	Disabled bool `json:"disabled,omitempty"`
 }

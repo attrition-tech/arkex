@@ -81,6 +81,9 @@ var ErrRunStillActive = errors.New("agent did not stop; scratch files retained")
 func Run(ctx context.Context, o Options) (err error) {
 	m := newModel(o)
 	defer func() {
+		if m.pal != nil && m.pal.cancel != nil {
+			m.pal.cancel()
+		}
 		if m.cancel != nil {
 			m.cancel()
 		}
@@ -528,6 +531,8 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 		return m, m.compactDone(msg)
 	case sessionTitleMsg:
 		return m, m.sessionTitleDone(msg)
+	case reasoningCheckedMsg:
+		return m, m.reasoningChecked(msg)
 	case sessionConnectedMsg:
 		return m, m.sessionConnected(msg)
 	case workingMsg:

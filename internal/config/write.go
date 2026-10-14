@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 
 	"github.com/attrition-tech/arkex/internal/fileutil"
 )
@@ -136,6 +137,52 @@ func SetContextWindow(path, provID, modelID string, tokens int) error {
 					delete(m, "contextWindow")
 				}
 			}
+			return models
+		}, nil)
+	})
+}
+
+// SaveCheckedReasoning changes only the selected model's reasoning metadata
+// and format, preserving unknown keys. Connection settings and the selected
+// controls must still match the check's snapshot. Other model metadata, such
+// as a learned context limit, is not overwritten or treated as a conflict.
+func SaveCheckedReasoning(path string, previous ModelRef, checked Model) error {
+	return edit(path, func(root map[string]any) error {
+		b, err := json.Marshal(connections(root)[previous.ConnID])
+		if err != nil {
+			return err
+		}
+		var current Connection
+		if err := json.Unmarshal(b, &current); err != nil {
+			return err
+		}
+		currentModels, previousConn := current.Models, previous.Conn
+		current.Models, previousConn.Models = nil, nil
+		if !reflect.DeepEqual(current, previousConn) {
+			return errors.New("connection changed; reconnect and check again")
+		}
+		for _, md := range currentModels {
+			if md.ID == previous.Model.ID && (md.Disabled != previous.Model.Disabled ||
+				!reflect.DeepEqual(md.Compat, previous.Model.Compat) ||
+				!reflect.DeepEqual(md.ReasoningLevels, previous.Model.ReasoningLevels) ||
+				md.ReasoningDefault != previous.Model.ReasoningDefault || md.ReasoningChecked != previous.Model.ReasoningChecked) {
+				return errors.New("model controls changed; reconnect and check again")
+			}
+		}
+		return withModel(root, path, previous.ConnID, previous.Model.ID, func(models []any, i int) []any {
+			m := models[i].(map[string]any)
+			m["reasoningLevels"], m["reasoningChecked"] = checked.ReasoningLevels, true
+			if checked.ReasoningDefault == "" {
+				delete(m, "reasoningDefault")
+			} else {
+				m["reasoningDefault"] = checked.ReasoningDefault
+			}
+			compat, _ := m["compat"].(map[string]any)
+			if compat == nil {
+				compat = map[string]any{}
+				m["compat"] = compat
+			}
+			compat["thinking"] = checked.Compat.Thinking
 			return models
 		}, nil)
 	})

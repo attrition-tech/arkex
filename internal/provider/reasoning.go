@@ -21,6 +21,9 @@ func ReasoningControls(ref config.ModelRef) (levels []string, defaultLevel, sour
 				levels = append(levels, level)
 			}
 		}
+		if ref.Model.ReasoningChecked {
+			return levels, ref.Model.ReasoningDefault, "accepted by server · unverified"
+		}
 		return levels, ref.Model.ReasoningDefault, "model configuration / discovery"
 	}
 	switch ref.Compat().Thinking {

@@ -92,7 +92,7 @@ var (
 	knownTop        = []string{"version", "connections", "profiles", "default", "permissions", "ui"}
 	knownConnection = []string{"name", "kind", "subscription", "api", "baseUrl", "apiKey", "headers", "compat", "models", "disabled"}
 	knownKinds      = []string{string(KindLLMServer), string(KindAPIKey), string(KindSubscription), string(KindRuntime)}
-	knownModel      = []string{"id", "name", "reasoning", "reasoningLevels", "reasoningDefault", "contextWindow", "maxTokens", "cost", "compat", "disabled"}
+	knownModel      = []string{"id", "name", "reasoning", "reasoningLevels", "reasoningDefault", "reasoningChecked", "contextWindow", "maxTokens", "cost", "compat", "disabled"}
 	knownCompat     = []string{"thinking", "extraBody"}
 	knownCost       = []string{"input", "output", "cacheRead", "cacheWrite"}
 	knownProfile    = []string{"model", "thinking"}

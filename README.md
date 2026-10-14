@@ -36,6 +36,34 @@ Configuration and sessions stay in `~/.arkex/`. API keys can reference environme
 variables instead of being stored directly, for example `"apiKey": "$MY_API_KEY"`.
 Prompts and relevant project content are sent to the model provider you choose.
 
+### Check reasoning on a custom server
+
+While idle, open **Reasoning effort** (`/effort`) and choose **Check reasoning…**.
+The explicit check uses the selected model's configured endpoint, key and headers.
+It sends only a synthetic prompt, never conversation history, attachments or tools.
+It tries the configured reasoning format first, then other formats Arkex supports,
+preferring effort levels over a toggle-only result. It is not automatic discovery
+and can incur provider charges: at most 35 requests, each requesting 64 output
+tokens, with a 15-second request timeout and a three-minute overall limit.
+There are no retries or redirects; Esc cancels the check.
+
+Choices are reported as **accepted by server** only when valid settings are
+accepted and a deliberately invalid control is rejected with a relevant validation
+error. A permissive server is **inconclusive**, not assumed to ignore the field.
+Request acceptance does not prove that the model uses a setting or that High
+reasons more than Low. Authentication, rate-limit and transport failures discard
+partial results. Fixed request/control overrides in `compat.extraBody` block the
+check rather than being silently removed.
+
+Review the result and choose **Use these options for this model** to save its
+`reasoningLevels`, `compat.thinking` and `reasoningChecked` marker. This replaces
+only that model's controls and resets the current session's effort to Default;
+history, other models and the configured default selector stay unchanged.
+Nothing is saved before this action. Later configuration edits prevent saving a
+stale check. You can still configure levels manually; clear `reasoningChecked`
+when replacing checked levels by hand. A check does not discover the server's
+default effort.
+
 ### Sign in with ChatGPT
 
 Choose **Subscription → ChatGPT → Continue with ChatGPT** in `/connections`.

@@ -494,7 +494,7 @@ func (c sandboxMutationContext) Err() error {
 	return c.Context.Err()
 }
 
-func TestSandboxCaptureDetectsChangingSource(t *testing.T) {
+func TestSandboxCaptureIsolatesChangingSource(t *testing.T) {
 	for _, mutation := range []string{"same-length", "truncate", "grow", "replace-with-symlink"} {
 		t.Run(mutation, func(t *testing.T) {
 			workspace := t.TempDir()
@@ -540,16 +540,17 @@ func TestSandboxCaptureDetectsChangingSource(t *testing.T) {
 			if !mutated {
 				t.Fatal("did not exercise the capture race")
 			}
-			if mutation == "replace-with-symlink" {
-				if err != nil {
+			if err != nil {
+				if mutation == "replace-with-symlink" || !strings.Contains(err.Error(), "file changed during capture") {
 					t.Fatal(err)
 				}
-				sandboxContents(t, filepath.Join(workspace, "file"), "modified")
-			} else {
-				if err == nil || !strings.Contains(err.Error(), "file changed during capture") {
-					t.Fatalf("mutation was not rejected: %v", err)
-				}
 				sandboxContents(t, filepath.Join(workspace, "file"), "original")
+			} else {
+				// A private clone already captured the compared bytes before
+				// mutation. Publishing those bytes is safe; a streaming copy
+				// instead rejects a mismatch without changing the workspace.
+				sandboxContents(t, filepath.Join(workspace, "file"), "modified")
+				sandboxContents(t, filepath.Join(run.temp, "capture-0/file"), "modified")
 			}
 		})
 	}

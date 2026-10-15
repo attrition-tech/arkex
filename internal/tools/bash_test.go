@@ -134,6 +134,53 @@ func TestBashEmptyAndSilentCommands(t *testing.T) {
 	}
 }
 
+func TestBashConfigurableBudgets(t *testing.T) {
+	for _, bound := range []string{"bytes", "entries"} {
+		t.Run(bound, func(t *testing.T) {
+			workspace := t.TempDir()
+			writeFile(t, filepath.Join(workspace, "base"), "base")
+			b := &Bash{Dir: workspace, Shell: "/bin/sh", Limits: SandboxLimits{MaxBytes: 3, BytesSource: "fixture byte budget"}}
+			if bound == "entries" {
+				b.Limits = SandboxLimits{MaxEntries: 1, EntriesSource: "fixture entry budget"}
+			}
+			res, err := runBash(t, b, map[string]any{"command": "echo must-not-run"})
+			if err == nil || !strings.Contains(err.Error(), "prepare private execution:") || !strings.Contains(err.Error(), "fixture") || strings.Contains(res.Output, "must-not-run") {
+				t.Fatalf("preparation ignored configured %s cap: %v: %s", bound, err, res.Output)
+			}
+			if bound == "bytes" {
+				b.Limits.MaxBytes = 8
+			} else {
+				b.Limits.MaxEntries = 3
+			}
+			// Exactly eight bytes / three entries (including the root),
+			// with only the chosen budget restricted.
+			res, err = runBash(t, b, map[string]any{"command": "printf next > next"})
+			if err != nil {
+				t.Fatalf("exact budget rejected: %v: %s", err, res.Output)
+			}
+			res, err = runBash(t, b, map[string]any{"command": "printf x > extra"})
+			if err == nil || !strings.Contains(err.Error(), "capture failed") || !strings.Contains(err.Error(), "fixture") || !strings.Contains(res.Output, "approaches its budget") {
+				t.Fatalf("capture ignored configured %s cap: %v: %s", bound, err, res.Output)
+			}
+			if _, err := os.Stat(filepath.Join(workspace, "extra")); !os.IsNotExist(err) {
+				t.Fatal("oversized command output was published")
+			}
+			if bound == "bytes" {
+				b.Limits.MaxBytes = 16
+			} else {
+				b.Limits.MaxEntries = 4
+			}
+			res, err = runBash(t, b, map[string]any{"command": "printf x > extra"})
+			if err != nil {
+				t.Fatalf("raised cap did not reach execution/publication: %v: %s", err, res.Output)
+			}
+			sandboxContents(t, filepath.Join(workspace, "base"), "base")
+			sandboxContents(t, filepath.Join(workspace, "next"), "next")
+			sandboxContents(t, filepath.Join(workspace, "extra"), "x")
+		})
+	}
+}
+
 func TestBashTimeoutKillsProcessGroup(t *testing.T) {
 	dir := t.TempDir()
 	b := &Bash{Dir: dir, Shell: "/bin/sh"}

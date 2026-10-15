@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -131,6 +132,59 @@ func TestInstructionsReadAndEditTargets(t *testing.T) {
 			res, bad, err := a.runOne(t.Context(), ToolCall{Name: name, Input: `{"path":"sub/deep/new.txt"}`}, func(Event) {})
 			if err != nil || bad || !strings.Contains(res.Output, "deep rule") {
 				t.Fatalf("instructions missing: %+v %v %v", res, bad, err)
+			}
+		})
+	}
+}
+
+func TestMoveLoadsBothInstructionScopesWithoutFollowingFinalSymlink(t *testing.T) {
+	for _, link := range []bool{false, true} {
+		t.Run(fmt.Sprint("symlink=", link), func(t *testing.T) {
+			root := instructionFixture(t)
+			source, destination := "sub/deep/source", "other/destination"
+			if link {
+				destination = "moved-link"
+				if err := os.Symlink(filepath.Join(root, "other"), filepath.Join(root, source)); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(filepath.Join(root, source), []byte("source WIP"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			input, _ := json.Marshal(map[string]string{"path": source, "destination": destination})
+			call := func(w http.ResponseWriter) {
+				body := fmt.Sprintf(`{"tool_calls":[{"index":0,"id":"c","type":"function","function":{"name":"move","arguments":%q}}]}`, input)
+				sse(w, delta(body, ""), delta(`{}`, "tool_calls"))
+			}
+			fake := &fakeServer{script: []func(http.ResponseWriter){call, func(w http.ResponseWriter) {
+				if _, err := os.Lstat(filepath.Join(root, source)); err != nil {
+					t.Error("move ran before instructions were delivered")
+				}
+				call(w)
+			}, func(w http.ResponseWriter) { sse(w, delta(`{"content":"done"}`, "stop")) }}}
+			server := httptest.NewServer(http.HandlerFunc(fake.handler))
+			defer server.Close()
+			model, err := provider.Open(t.Context(), config.ModelRef{Conn: config.Connection{BaseURL: server.URL}, Model: config.Model{ID: "test"}}, server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			a := &Agent{Model: model, Tools: tools.Default(root), Policy: AllowAll{}, System: testPrompt(t, root)}
+			if err := a.Run(t.Context(), "move the source entry to the destination", nil); err != nil {
+				t.Fatal(err)
+			}
+			request, _ := json.Marshal(fake.requests[1])
+			text := string(request)
+			if !strings.Contains(text, "deep rule") || !strings.Contains(text, "sub rule") || strings.Contains(text, "unrelated rule") == link {
+				t.Fatalf("wrong source/destination scopes: %s", text)
+			}
+			if _, err := os.Lstat(filepath.Join(root, source)); !os.IsNotExist(err) {
+				t.Fatal("move did not remove source:", err)
+			}
+			if link {
+				if target, err := os.Readlink(filepath.Join(root, destination)); err != nil || target != filepath.Join(root, "other") {
+					t.Fatalf("symlink target changed: %q: %v", target, err)
+				}
+			} else if body, err := os.ReadFile(filepath.Join(root, destination)); err != nil || string(body) != "source WIP" {
+				t.Fatalf("file move lost WIP: %q: %v", body, err)
 			}
 		})
 	}

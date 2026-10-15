@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -9,15 +10,21 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"golang.org/x/sys/unix"
 )
 
 // sandboxRun never exposes live workspace inodes for subprocess writes. Close
 // only discards resources; publication must be requested explicitly after Run.
 type sandboxRun struct {
-	cmd     *exec.Cmd
-	temp    string
-	trees   []*sandboxTree
-	release func()
+	cmd      *exec.Cmd
+	temp     string
+	trees    []*sandboxTree
+	release  func()
+	limits   SandboxLimits
+	readOnly bool
+	scratch  string
+	warnings []string
 }
 
 func sandboxRoots(workspace, scratch string) ([]string, error) {
@@ -49,15 +56,20 @@ func sandboxRoots(workspace, scratch string) ([]string, error) {
 	return roots, nil
 }
 
-func sandboxCommand(ctx context.Context, workspace, scratch, workdir, program string, args ...string) (_ *sandboxRun, err error) {
+func sandboxCommand(ctx context.Context, workspace, scratch, workdir string, limits SandboxLimits, readOnly bool, program string, args ...string) (_ *sandboxRun, err error) {
 	roots, err := sandboxRoots(workspace, scratch)
 	if err != nil {
 		return nil, err
 	}
-	s := &sandboxRun{}
+	limits, err = limits.Effective()
+	if err != nil {
+		return nil, err
+	}
+	s := &sandboxRun{limits: limits, readOnly: readOnly, scratch: scratch}
 	defer func() {
 		if err != nil {
 			s.Close()
+			err = sandboxStorageError(err)
 		}
 	}()
 	// Use the OS temporary directory, not a possibly workspace-local TMPDIR.
@@ -75,16 +87,34 @@ func sandboxCommand(ctx context.Context, workspace, scratch, workdir, program st
 			return nil, fmt.Errorf("private execution directory overlaps a write root; the system temporary directory cannot be a workspace or scratch root")
 		}
 	}
-	for i, path := range roots {
-		tree := &sandboxTree{path: path, execution: filepath.Join(s.temp, fmt.Sprint(i))}
-		s.trees = append(s.trees, tree)
-		tree.host, err = os.OpenRoot(path)
-		if err != nil {
+	if readOnly {
+		// Do not copy either original root. Both remain read-only, including
+		// an oversized scratch. This fresh diagnostic temp is discarded, never
+		// published or reused by another call.
+		s.scratch = filepath.Join(s.temp, "diagnostic-scratch")
+		if err := os.Mkdir(s.scratch, 0o700); err != nil {
 			return nil, err
 		}
-		tree.before, err = snapshotTree(ctx, tree.host, tree.execution, nil)
-		if err != nil {
-			return nil, fmt.Errorf("prepare private execution: %w", err)
+		s.trees = append(s.trees, &sandboxTree{path: s.scratch, execution: s.scratch})
+	} else {
+		for i, path := range roots {
+			tree := &sandboxTree{path: path, execution: filepath.Join(s.temp, fmt.Sprint(i))}
+			s.trees = append(s.trees, tree)
+			tree.host, err = os.OpenRoot(path)
+			if err != nil {
+				return nil, err
+			}
+			tree.before, err = snapshotTree(ctx, tree.host, tree.execution, nil, limits)
+			if err != nil {
+				return nil, fmt.Errorf("prepare private execution: %w", err)
+			}
+			var bytes int64
+			for _, entry := range tree.before {
+				bytes += entry.bytes
+			}
+			if (limits.MaxBytes > 0 && bytes >= limits.MaxBytes-limits.MaxBytes/10) || (limits.MaxEntries > 0 && len(tree.before) >= limits.MaxEntries-limits.MaxEntries/10) {
+				s.warnings = append(s.warnings, fmt.Sprintf("sandbox tree %q approaches its budget: %s, %d entries; budget %s; see README: Large workspaces", path, sandboxBytes(bytes), len(tree.before), limits.description()))
+			}
 		}
 	}
 	s.cmd, s.release, err = platformSandbox(ctx, s.trees, s.runtimePath(workdir), s.runtimePath(program), args)
@@ -92,6 +122,13 @@ func sandboxCommand(ctx context.Context, workspace, scratch, workdir, program st
 		return nil, err
 	}
 	return s, nil
+}
+
+func sandboxStorageError(err error) error {
+	if errors.Is(err, unix.ENOSPC) || errors.Is(err, unix.EDQUOT) {
+		return fmt.Errorf("%w; private execution needs available storage: check free space and disk quotas for the system temporary directory and workspace. Raising a configured budget cannot fix exhausted storage. Use ls/grep without staging to inspect files; do not delete unrelated WIP", err)
+	}
+	return err
 }
 
 // Linux can mount copies at the logical paths. Seatbelt cannot remap paths:
@@ -185,7 +222,7 @@ func CheckSandbox(ctx context.Context, workspace, scratch string) error {
 printf probe > writable || exit 41
 if /bin/ln "$1" outside-link; then exit 42; fi
 if /bin/ln writable inside-link; then exit 43; fi`
-	run, err := sandboxCommand(ctx, workspaceProbe, "", workspaceProbe, "/bin/sh", "-c", probe, "probe", source)
+	run, err := sandboxCommand(ctx, workspaceProbe, "", workspaceProbe, SandboxLimits{}, false, "/bin/sh", "-c", probe, "probe", source)
 	if err != nil {
 		return err
 	}

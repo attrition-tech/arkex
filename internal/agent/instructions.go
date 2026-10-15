@@ -26,18 +26,28 @@ func (a *Agent) toolInstructions(ctx context.Context, tool tools.Tool, input jso
 		root = t.Root
 	case *tools.Edit:
 		root = t.Root
+	case *tools.List:
+		root = t.Root
+	case *tools.Search:
+		root = t.Root
+	case *tools.Remove:
+		root = t.Root
+	case *tools.Move:
+		root = t.Root
 	case *tools.Bash:
 		root = t.Dir
 	default:
 		return "", nil
 	}
 	var in struct {
-		Path    string `json:"path"`
-		Workdir string `json:"workdir"`
+		Path        string `json:"path"`
+		Workdir     string `json:"workdir"`
+		Destination string `json:"destination"`
 	}
 	if err := json.Unmarshal(input, &in); err != nil {
 		return "", nil // The tool supplies the normal argument error.
 	}
+	entryAction := tool.Name() == "remove" || tool.Name() == "move"
 	resolve := func(path string) string {
 		if path == "~" || strings.HasPrefix(path, "~/") {
 			home, _ := os.UserHomeDir()
@@ -46,27 +56,48 @@ func (a *Agent) toolInstructions(ctx context.Context, tool tools.Tool, input jso
 		if !filepath.IsAbs(path) {
 			path = filepath.Join(root, path)
 		}
-		return instructionPath(filepath.Clean(path))
+		path = filepath.Clean(path)
+		if entryAction {
+			// Removing/moving a final symlink affects its directory entry,
+			// not its target's instruction scope.
+			return filepath.Join(instructionPath(filepath.Dir(path)), filepath.Base(path))
+		}
+		return instructionPath(path)
 	}
-	var dir string
+	paths := []string{in.Path}
 	if tool.Name() == "bash" {
-		dir = resolve(in.Workdir)
-	} else {
-		if in.Path == "" {
-			return "", nil
-		}
-		path := resolve(in.Path)
-		dir = filepath.Dir(path)
-		if st, err := os.Stat(path); err == nil && st.IsDir() {
-			dir = path
-		}
+		paths = []string{in.Workdir}
+	} else if in.Path == "" && tool.Name() != "ls" && tool.Name() != "grep" {
+		return "", nil
+	}
+	if tool.Name() == "move" && in.Destination != "" {
+		paths = append(paths, in.Destination)
 	}
 	var out strings.Builder
-	files, err := prompt.AgentsFiles(dir)
-	if err != nil {
-		return "", err
+	files := []string{}
+	stat := os.Stat
+	if entryAction {
+		stat = os.Lstat
 	}
+	for _, path := range paths {
+		dir := resolve(path)
+		if tool.Name() != "bash" {
+			if st, err := stat(dir); err != nil || !st.IsDir() {
+				dir = filepath.Dir(dir)
+			}
+		}
+		found, err := prompt.AgentsFiles(dir)
+		if err != nil {
+			return "", err
+		}
+		files = append(files, found...)
+	}
+	seen := map[string]bool{}
 	for _, path := range files {
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
 		args, _ := json.Marshal(map[string]string{"path": path})
 		decision, err := a.Policy.Decide(ctx, ToolCall{Name: "read", Input: string(args)})
 		if err != nil {

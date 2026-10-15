@@ -80,13 +80,21 @@ func (r *Registry) Fantasy() []fantasy.Tool {
 }
 
 // Default returns the built-in tool set rooted at dir.
-func Default(dir string) *Registry {
+func Default(dir string, limits ...SandboxLimits) *Registry {
+	var budget SandboxLimits
+	if len(limits) > 0 {
+		budget = limits[0]
+	}
 	return NewRegistry(
 		&Read{Root: dir},
 		&Write{Root: dir},
 		&Edit{Root: dir},
-		&Bash{Dir: dir},
-		&Packages{Root: dir},
+		&Bash{Dir: dir, Limits: budget},
+		&Packages{Root: dir, Limits: budget},
+		&List{Root: dir},
+		&Search{Root: dir},
+		&Remove{Root: dir},
+		&Move{Root: dir},
 	)
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -31,7 +32,7 @@ func sandboxContents(t *testing.T, path, want string) {
 
 func preparedSandbox(t *testing.T, workspace, scratch, command string) *sandboxRun {
 	t.Helper()
-	run, err := sandboxCommand(t.Context(), workspace, scratch, workspace, "/bin/sh", "-c", command)
+	run, err := sandboxCommand(t.Context(), workspace, scratch, workspace, SandboxLimits{}, false, "/bin/sh", "-c", command)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,20 +285,97 @@ func TestSandboxPublishesTimestampsAndReadOnlyDirectories(t *testing.T) {
 	}
 }
 
-func TestSandboxRejectsOversizedInputBeforeExecution(t *testing.T) {
-	workspace := t.TempDir()
-	path := filepath.Join(workspace, "sparse")
-	sandboxFixture(t, path, "")
-	if err := os.Truncate(path, sandboxTreeBytes+1); err != nil {
+func TestSandboxOversizedWorkspaceRecovery(t *testing.T) {
+	workspace, scratch, outside := t.TempDir(), t.TempDir(), t.TempDir()
+	for _, dir := range []string{workspace, filepath.Join(workspace, "sub")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
+			t.Fatalf("git fixture: %s: %v", out, err)
+		}
+	}
+	writeFile(t, filepath.Join(workspace, "wip.txt"), "uncommitted WIP\nneedle evidence\n")
+	writeFile(t, filepath.Join(scratch, "keep"), "scratch WIP")
+	writeFile(t, filepath.Join(outside, "keep"), "outside WIP")
+	path := filepath.Join(workspace, "tiles", "world.pmtiles")
+	writeFile(t, path, "")
+	if err := os.Truncate(path, 9<<30); err != nil {
 		t.Fatal(err)
 	}
-	_, err := sandboxCommand(t.Context(), workspace, "", workspace, "/bin/sh", "-c", "touch must-not-run")
-	if err == nil || !strings.Contains(err.Error(), "exceeds 8 GiB") {
-		t.Fatalf("oversized input not rejected: %v", err)
+	b := &Bash{Dir: workspace, TempDir: scratch, Shell: "/bin/sh", Limits: SandboxLimits{MaxBytes: 8 << 30, BytesSource: "explicit tool budget"}}
+	for _, workdir := range []string{workspace, "sub", scratch} {
+		_, err := runBash(t, b, map[string]any{"command": "touch must-not-run", "workdir": workdir})
+		if err == nil {
+			t.Fatal("oversized input executed a command")
+		}
+		for _, want := range []string{"prepare private execution:", "exceeds 8 GiB", "Measured 9 GiB", "8589934592 bytes", "9663676416 bytes", "explicit tool budget", "no entry cap configured", "Largest top-level directories", "tiles/", "world.pmtiles", "crossing entry", "ARKEX_SANDBOX_MAX_BYTES", "sandbox.maxBytes", "read_only=true", "workdir does not narrow"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("missing diagnostic %q: %v", want, err)
+			}
+		}
+		if !filepath.IsAbs(workdir) {
+			workdir = filepath.Join(workspace, workdir)
+		}
+		if _, err := os.Stat(filepath.Join(workdir, "must-not-run")); !os.IsNotExist(err) {
+			t.Fatal("setup failure ran the command")
+		}
 	}
-	if _, err := os.Stat(filepath.Join(workspace, "must-not-run")); !os.IsNotExist(err) {
-		t.Fatal("setup failure ran the command")
+	if _, err := runBash(t, b, map[string]any{"command": "echo ok", "browser": "chromium"}); err == nil || !strings.Contains(err.Error(), "exceeds 8 GiB") {
+		t.Fatalf("browser preparation bypassed the guard: %v", err)
 	}
+	// An oversized original scratch must not be staged for diagnosis either.
+	writeFile(t, filepath.Join(scratch, "large"), "")
+	if err := os.Truncate(filepath.Join(scratch, "large"), 9<<30); err != nil {
+		t.Fatal(err)
+	}
+	for _, workdir := range []string{workspace, "sub", scratch} {
+		res, err := runBash(t, b, map[string]any{
+			"command": "set -e; ls > \"$TMPDIR/list\"; du -sk . > \"$TMPDIR/size\"; git -C " + strconv.Quote(workspace) + " status --porcelain; echo ok",
+			"workdir": workdir, "read_only": true,
+		})
+		if err != nil || !strings.Contains(res.Output, "?? wip.txt") || !strings.Contains(res.Output, "ok\n") || !strings.Contains(res.Output, "no publication") {
+			t.Fatalf("diagnosis in %s failed: %v: %s", workdir, err, res.Output)
+		}
+	}
+	for _, target := range []string{"wip.txt", filepath.Join(scratch, "keep"), filepath.Join(outside, "keep")} {
+		res, err := runBash(t, b, map[string]any{"command": "printf forbidden > " + strconv.Quote(target), "read_only": true})
+		if err == nil {
+			t.Fatalf("diagnostic write allowed: %s: %s", target, res.Output)
+		}
+	}
+	res, err := runBash(t, b, map[string]any{"command": `printf '%s\n' "$TMPDIR"; printf disposable > "$TMPDIR/file"; cat "$TMPDIR/file"`, "read_only": true})
+	if err != nil || !strings.Contains(res.Output, "disposable\n") {
+		t.Fatalf("diagnostic temp unwritable: %v: %s", err, res.Output)
+	}
+	temp, _, _ := strings.Cut(res.Output, "\n")
+	if !filepath.IsAbs(temp) {
+		t.Fatalf("invalid diagnostic temp: %q", temp)
+	}
+	if _, err := os.Stat(temp); !os.IsNotExist(err) {
+		t.Fatalf("diagnostic temp was retained: %v", err)
+	}
+	if _, err := runBash(t, b, map[string]any{"command": "echo ok", "browser": "chromium", "read_only": true}); err == nil || !strings.Contains(err.Error(), "read-only") {
+		t.Fatalf("diagnostic browser allowed: %v", err)
+	}
+	out := filesystemRun(t, &List{Root: workspace}, map[string]any{"recursive": true, "pattern": "*.pmtiles"})
+	if !strings.Contains(out, `file`+"\t9663676416\t"+`"tiles/world.pmtiles"`) {
+		t.Fatal("large file could not be listed:", out)
+	}
+	out = filesystemRun(t, &Search{Root: workspace}, map[string]any{"pattern": "needle", "glob": "*.txt"})
+	if out != "wip.txt:2:needle evidence\n" {
+		t.Fatal("large workspace could not be searched:", out)
+	}
+	res, err = (&Packages{Root: workspace, TempDir: scratch}).Run(t.Context(), []byte(`{"action":"inspect"}`))
+	if err != nil || !strings.Contains(res.Output, `"managers"`) || strings.Contains(res.Output, "manager probe failed") {
+		t.Fatalf("package inspect staged oversized roots: %v: %s", err, res.Output)
+	}
+	// Recovery tools operate directly, preserving WIP, without shell staging.
+	filesystemRun(t, &Move{Root: workspace}, map[string]any{"path": "tiles/world.pmtiles", "destination": "tiles/renamed.pmtiles"})
+	filesystemRun(t, &Remove{Root: workspace}, map[string]any{"path": "tiles", "recursive": true})
+	sandboxContents(t, filepath.Join(workspace, "wip.txt"), "uncommitted WIP\nneedle evidence\n")
+	sandboxContents(t, filepath.Join(scratch, "keep"), "scratch WIP")
+	sandboxContents(t, filepath.Join(outside, "keep"), "outside WIP")
 }
 
 // Model dependency trees with many small files and deep paths, rather than
@@ -337,7 +415,7 @@ func BenchmarkSandboxDependencyTree(b *testing.B) {
 	workspace := b.TempDir()
 	sandboxDependencies(b, workspace)
 	for b.Loop() {
-		run, err := sandboxCommand(b.Context(), workspace, "", workspace, "/bin/sh", "-c", "true")
+		run, err := sandboxCommand(b.Context(), workspace, "", workspace, SandboxLimits{}, false, "/bin/sh", "-c", "true")
 		if err != nil {
 			b.Fatal(err)
 		}

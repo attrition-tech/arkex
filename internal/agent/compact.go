@@ -199,8 +199,9 @@ func (a *Agent) autoCompact(ctx context.Context, emit func(Event), keep int, rea
 		return res, errors.New("summary and recent messages still exceed the safe context budget")
 	}
 	// Tiny manual conversations may grow by the fixed recovery note. For a
-	// substantial history compaction must actually reduce the request.
-	if before > a.ContextWindow()/4 && after >= before {
+	// substantial history compaction must actually reduce the request. System
+	// instructions and tool schemas cannot be compressed into the handoff.
+	if estimateTokens(a.messages, defaultCharsPerToken) > a.ContextWindow()/4 && after >= before {
 		return res, errors.New("summary did not reduce context")
 	}
 	if err := ctx.Err(); err != nil {

@@ -16,15 +16,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// These bounds also apply to hostile output (including concurrent writers).
-// Do not follow links, reproduce special nodes, or read an unbounded stream.
-const sandboxTreeBytes int64 = 8 << 30
-const sandboxTreeEntries = 250_000
-
 type sandboxEntry struct {
 	mode     os.FileMode
 	hash     [sha256.Size]byte
 	link     string
+	bytes    int64 // actual regular-file bytes hashed, not allocated disk blocks
 	modified int64 // regular files only; directory mtimes change during copying
 }
 
@@ -62,13 +58,14 @@ func snapshotDirectory(source *os.Root, name string, dir *os.File) (*os.Root, er
 	return root, nil
 }
 
-// snapshotTree copies to fresh inodes, or only hashes when destination is empty.
+// snapshotTree stages fresh inodes (APFS clones when available), or only hashes
+// when destination is empty. A cloned baseline hashes the private clone itself.
 // With a baseline, it captures only changed regular files. The manifest still
 // contains every entry; absent capture payloads must never imply deletions.
 // The returned manifest describes the bytes actually captured, not a separate
 // earlier stat/read. An active hostile writer can produce inconsistent bytes,
 // but cannot retain a writable descriptor to the captured files.
-func snapshotTree(ctx context.Context, source *os.Root, destination string, baseline map[string]sandboxEntry) (map[string]sandboxEntry, error) {
+func snapshotTree(ctx context.Context, source *os.Root, destination string, baseline map[string]sandboxEntry, limits SandboxLimits) (map[string]sandboxEntry, error) {
 	var dest *os.Root
 	if destination != "" {
 		if err := os.Mkdir(destination, 0o700); err != nil {
@@ -82,15 +79,16 @@ func snapshotTree(ctx context.Context, source *os.Root, destination string, base
 		defer func() { _ = dest.Close() }()
 	}
 	entries := make(map[string]sandboxEntry)
-	remaining := sandboxTreeBytes
+	remaining := limits.MaxBytes
+	root := source
 	buffer := make([]byte, 32*1024)
 	var walk func(*os.Root, *os.Root, string, string) error
 	walk = func(source, dest *os.Root, name, path string) error {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if len(entries) >= sandboxTreeEntries {
-			return errors.New("sandbox tree exceeds 250000 entries")
+		if limits.MaxEntries > 0 && len(entries) >= limits.MaxEntries {
+			return sandboxLimitError(ctx, root, limits, fmt.Sprintf("%d entries", limits.MaxEntries), path)
 		}
 		info, err := source.Lstat(name)
 		if err != nil {
@@ -159,28 +157,47 @@ func snapshotTree(ctx context.Context, source *os.Root, destination string, base
 			if err == nil && !opened.Mode().IsRegular() {
 				err = fmt.Errorf("not a regular file: %s", name)
 			}
-			if err == nil && opened.Size() > remaining {
-				err = errors.New("sandbox tree exceeds 8 GiB")
+			if err == nil && limits.MaxBytes > 0 && opened.Size() > remaining {
+				err = sandboxLimitError(ctx, root, limits, sandboxBytes(limits.MaxBytes), path)
 			}
 			if err == nil {
-				entry.mode = opened.Mode().Perm()
-				entry.modified = opened.ModTime().UnixNano()
 				var output *os.File
+				cloned := false
 				if dest != nil && baseline == nil {
-					output, err = dest.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+					output, err = cloneSandboxFile(file, dest, name)
+					cloned = output != nil
+					if err == nil && cloned {
+						opened, err = output.Stat()
+						if err == nil && limits.MaxBytes > 0 && opened.Size() > remaining {
+							err = sandboxLimitError(ctx, root, limits, sandboxBytes(limits.MaxBytes), path)
+						}
+					} else if err == nil {
+						output, err = dest.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+					}
 				}
 				if err == nil {
+					entry.mode = opened.Mode().Perm()
+					entry.modified = opened.ModTime().UnixNano()
 					hash := sha256.New()
 					var writer io.Writer = hash
-					if output != nil {
+					var reader io.Reader = file
+					if cloned {
+						reader = output
+					} else if output != nil {
 						writer = io.MultiWriter(hash, output)
 					}
-					var size int64
-					size, err = io.CopyBuffer(writer, sandboxReader{ctx, io.LimitReader(file, remaining+1)}, buffer)
-					remaining -= size
-					if remaining < 0 {
-						err = errors.New("sandbox tree exceeds 8 GiB")
+					if limits.MaxBytes > 0 {
+						reader = io.LimitReader(reader, remaining+1)
 					}
+					var size int64
+					size, err = io.CopyBuffer(writer, sandboxReader{ctx, reader}, buffer)
+					if limits.MaxBytes > 0 {
+						remaining -= size
+						if remaining < 0 {
+							err = sandboxLimitError(ctx, root, limits, sandboxBytes(limits.MaxBytes), path)
+						}
+					}
+					entry.bytes = size
 					copy(entry.hash[:], hash.Sum(nil))
 					if err == nil && dest != nil && baseline != nil && baseline[path] != entry {
 						// Re-read the same FD into a trusted, fresh inode. A late
@@ -190,12 +207,20 @@ func snapshotTree(ctx context.Context, source *os.Root, destination string, base
 							err = dest.MkdirAll(filepath.Dir(path), 0o700)
 						}
 						if err == nil {
-							output, err = dest.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+							output, err = cloneSandboxFile(file, dest, path)
+							cloned = output != nil
+							if err == nil && !cloned {
+								output, err = dest.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+							}
 						}
 						if err == nil {
 							hash.Reset()
+							reader, writer = file, io.MultiWriter(hash, output)
+							if cloned {
+								reader, writer = output, hash
+							}
 							var copied int64
-							copied, err = io.CopyBuffer(io.MultiWriter(hash, output), sandboxReader{ctx, io.LimitReader(file, size+1)}, buffer)
+							copied, err = io.CopyBuffer(writer, sandboxReader{ctx, io.LimitReader(reader, size+1)}, buffer)
 							if err == nil && (copied != size || string(hash.Sum(nil)) != string(entry.hash[:])) {
 								err = fmt.Errorf("file changed during capture: %s", path)
 							}
@@ -242,6 +267,9 @@ type sandboxChanges struct {
 // editor can still race check-and-rename; a cooperating malicious host that
 // moves open roots or inserts aliases into private copies is outside the model.
 func (s *sandboxRun) Publish(ctx context.Context) error {
+	if s.readOnly {
+		return nil // diagnostic calls never publish even their temporary writes
+	}
 	plans := []*sandboxChanges{}
 	defer func() {
 		for _, plan := range plans {
@@ -254,10 +282,10 @@ func (s *sandboxRun) Publish(ctx context.Context) error {
 			return err
 		}
 		path := filepath.Join(s.temp, fmt.Sprintf("capture-%d", i))
-		after, err := snapshotTree(ctx, execution, path, tree.before)
+		after, err := snapshotTree(ctx, execution, path, tree.before, s.limits)
 		_ = execution.Close()
 		if err != nil {
-			return fmt.Errorf("capture failed; command changes discarded: %w", err)
+			return fmt.Errorf("capture failed; command changes discarded: %w", sandboxStorageError(err))
 		}
 		captured, err := os.OpenRoot(path)
 		if err != nil {
@@ -278,7 +306,7 @@ func (s *sandboxRun) Publish(ctx context.Context) error {
 		if len(plan.names) == 0 {
 			continue // No writes proposed: leave host files and concurrent edits alone.
 		}
-		plan.live, err = snapshotTree(ctx, tree.host, "", nil)
+		plan.live, err = snapshotTree(ctx, tree.host, "", nil, s.limits)
 		if err != nil {
 			return fmt.Errorf("publication preflight failed; command changes discarded: %w", err)
 		}
@@ -328,7 +356,7 @@ func (s *sandboxRun) Publish(ctx context.Context) error {
 				return fmt.Errorf("publication interrupted after %d entries: %w", applied, err)
 			}
 			if err := plan.apply(ctx, name); err != nil {
-				return fmt.Errorf("publication stopped at %s after %d entries (earlier changes remain): %w", filepath.Join(plan.tree.path, name), applied, err)
+				return fmt.Errorf("publication stopped at %s after %d entries (earlier changes remain): %w", filepath.Join(plan.tree.path, name), applied, sandboxStorageError(err))
 			}
 			applied++
 		}
@@ -384,7 +412,7 @@ func (p *sandboxChanges) apply(ctx context.Context, name string) error {
 				return errors.New("destination is no longer a regular file")
 			}
 			hash := sha256.New()
-			_, err = io.Copy(hash, sandboxReader{ctx, io.LimitReader(file, sandboxTreeBytes+1)})
+			_, err = io.Copy(hash, sandboxReader{ctx, io.LimitReader(file, before.bytes+1)})
 			_ = file.Close()
 			if err == nil && (string(hash.Sum(nil)) != string(before.hash[:]) || opened.ModTime().UnixNano() != before.modified) {
 				err = errors.New("destination contents changed after preflight")

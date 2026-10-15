@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/attrition-tech/arkex/internal/config"
 	"github.com/attrition-tech/arkex/internal/sanitize"
 	"github.com/attrition-tech/arkex/internal/tools"
 )
@@ -52,7 +53,15 @@ func (m *model) runShell(command string) tea.Cmd {
 	return func() tea.Msg {
 		in, _ := json.Marshal(map[string]any{"command": command})
 		start := time.Now()
-		res, err := (&tools.Bash{Dir: dir}).Run(context.Background(), in)
+		cfg, err := config.Load(m.o.Cwd)
+		if err != nil {
+			return shellDoneMsg{id: id, err: err, dur: time.Since(start)}
+		}
+		limits, err := cfg.SandboxLimits()
+		if err != nil {
+			return shellDoneMsg{id: id, err: err, dur: time.Since(start)}
+		}
+		res, err := (&tools.Bash{Dir: dir, Limits: limits}).Run(context.Background(), in)
 		return shellDoneMsg{id: id, res: res, err: err, dur: time.Since(start)}
 	}
 }

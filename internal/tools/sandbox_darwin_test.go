@@ -10,7 +10,45 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
+
+func TestDarwinBashStagesReadOnlyAndFlaggedSources(t *testing.T) {
+	for _, flags := range []int{0, unix.UF_IMMUTABLE} {
+		t.Run(fmt.Sprint("flags=", flags), func(t *testing.T) {
+			workspace := t.TempDir()
+			source := filepath.Join(workspace, "source")
+			writeFile(t, source, "original source")
+			if err := os.Chmod(source, 0o444); err != nil {
+				t.Fatal(err)
+			}
+			if err := unix.Chflags(source, flags); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := unix.Chflags(source, 0); err != nil {
+					t.Error("clear disposable fixture flags:", err)
+				}
+			})
+			res, err := runBash(t, &Bash{Dir: workspace, Shell: "/bin/sh"}, map[string]any{
+				"command": "cat source; printf published > output",
+			})
+			if err != nil || !strings.Contains(res.Output, "original source") {
+				t.Fatalf("source could not be staged: %v: %s", err, res.Output)
+			}
+			sandboxContents(t, source, "original source")
+			sandboxContents(t, filepath.Join(workspace, "output"), "published")
+			var info unix.Stat_t
+			if err := unix.Lstat(source, &info); err != nil || info.Flags != uint32(flags) {
+				t.Fatalf("staging changed original flags: %d: %v", info.Flags, err)
+			}
+			if info.Mode&0o777 != 0o444 {
+				t.Fatalf("staging changed original permissions: %o", info.Mode)
+			}
+		})
+	}
+}
 
 func TestDarwinBrowserExactIPC(t *testing.T) {
 	// Compile a fixed native probe, never code supplied through the tool. It

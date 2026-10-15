@@ -146,6 +146,10 @@ func runRoot(ctx context.Context, f rootFlags, args []string) error {
 				tool.TempDir = dir
 			case *tools.Packages:
 				tool.TempDir = dir
+			case *tools.Remove:
+				tool.TempDir = dir
+			case *tools.Move:
+				tool.TempDir = dir
 			}
 		}
 		if !f.noTools {
@@ -185,7 +189,11 @@ func runRoot(ctx context.Context, f rootFlags, args []string) error {
 			Model: model, System: system, Policy: agent.ConfigPolicy{Config: cfg},
 		}
 		if !f.noTools {
-			ag.Tools = tools.Default(workspace)
+			limits, err := cfg.SandboxLimits()
+			if err != nil {
+				return nil, config.ModelRef{}, err
+			}
+			ag.Tools = tools.Default(workspace, limits)
 		} else {
 			ag.Tools = tools.NewRegistry()
 		}

@@ -50,7 +50,7 @@ type readInput struct {
 func (*Read) Name() string   { return "read" }
 func (*Read) ReadOnly() bool { return true }
 func (*Read) Description() string {
-	return "Read a text file. Returns numbered lines. Use offset (1-based line) and limit for large files."
+	return "Read a text file. Returns numbered lines. Use offset (1-based line) and limit for large files. Use ls for directory listings and grep to search text."
 }
 
 func (*Read) Schema() map[string]any {
@@ -79,6 +79,13 @@ func (t *Read) Run(_ context.Context, input json.RawMessage) (result Result, err
 			err = closeErr
 		}
 	}()
+	info, err := f.Stat()
+	if err != nil {
+		return Result{}, err
+	}
+	if info.IsDir() {
+		return Result{}, fmt.Errorf("%s is a directory; use the ls tool with this path to list its entries", in.Path)
+	}
 
 	start := max(in.Offset, 1)
 	limit := in.Limit

@@ -135,12 +135,16 @@ earlier entries applied. Avoid editing the same files while a command runs.
 Nonzero command exits still publish valid changes; cancellation discards
 unpublished changes. Unsupported entries (devices, sockets, FIFOs), directory
 type transitions, and symlinks into private execution paths block publication.
-Ownership, ACLs, arbitrary xattrs and hard-link identity are not reproduced.
-Each root is copied before execution and content-hashed afterward, with limits
-of 8 GiB and 250,000 entries. Only changed regular files receive a second,
-trusted capture copy; unchanged trees need no further host scan. Preparation
-still costs disk space and time on large projects. The shell timeout covers
-execution, not preparation or publication; caller cancellation applies throughout.
+Publication does not reproduce ownership, ACLs, arbitrary xattrs or hard-link
+identity. Each root is staged before execution and content-hashed afterward,
+without a default size/count cutoff. Only changed regular files receive a second,
+trusted capture; unchanged trees need no further host scan. On macOS, eligible
+files use APFS copy-on-write clones when supported, including trusted capture;
+other files and Linux use ordinary copies. Clones have separate inodes and may
+retain source extended attributes, but are never directly promoted into the live
+workspace. Preparation and hashing still cost time on large projects. The shell
+timeout covers execution, not preparation or publication; caller cancellation
+applies throughout.
 
 This boundary assumes a trusted host that does not move authorized roots,
 insert mount aliases, or inject host inodes into private execution directories.
@@ -149,6 +153,88 @@ It is not remote, network or availability protection: IP networking remains
 enabled, and host services must not be used as write proxies. Background jobs
 are unsupported; process cleanup is best-effort on macOS. Even a surviving
 descendant cannot modify published files through retained execution descriptors.
+
+### Large workspaces
+
+Normal shell calls stage the **whole workspace and active scratch**, including
+hidden files, nested repositories, dependencies and build outputs. `workdir`
+changes where a command starts, not what gets staged. There is **no default byte
+or entry cap**: crossing 8 GiB or 250,000 entries does not disable execution.
+Available disk space, memory, filesystem permissions and cancellation still
+apply; this does not make physical resources unlimited.
+
+To impose an optional resource budget for this project, merge this section into
+`.arkex/config.json` (or use `~/.arkex/config.json` for a global budget):
+
+```json
+{
+  "sandbox": {
+    "maxBytes": 17179869184,
+    "maxEntries": 500000
+  }
+}
+```
+
+This example caps each root at 16 GiB and 500,000 entries. To impose that cap
+for one launch instead:
+
+```sh
+ARKEX_SANDBOX_MAX_BYTES=17179869184 ARKEX_SANDBOX_MAX_ENTRIES=500000 arkex
+```
+
+Values must be positive decimal integers. Precedence for each value is
+environment → project → global → no cap. To remove a cap, unset its environment
+variable and remove the relevant config settings; zero is not a config value for
+unlimited execution. Optional budgets count logical regular-file bytes (even for
+sparse/cloned files) and all entries, including each root, independently. They
+apply to preparation, output capture and publication preflight, not filesystem
+permissions. The runtime reads them at setup, not from shell exports in a model's
+command. Budget errors identify the effective source and limit, the measured
+total, the entry that crossed the cap, and the largest files/top-level
+directories. The extra inventory is bounded to five seconds, one million entries
+and depth 64; incomplete totals are labeled as lower bounds. Calls that prepare
+a tree at 90% of either cap report a warning.
+Allow disk space and time for execution and trusted capture; removing a cap does
+not create more disk space. Storage/quota failures report a diagnostic hint and
+do not trigger unrelated cleanup or unrestricted execution.
+
+macOS attempts per-file cloning from the opened source descriptor into a new
+private inode. Source and clone do not share writable file contents. The baseline
+is hashed from the private clone, and capture clones are hash-checked before
+publication. Files with BSD flags (such as immutable/append-only) use ordinary
+copying so staging stays editable and cleanable without changing source flags.
+Unsupported cloning or different source/destination volumes also fall back to
+ordinary copying; permissions, I/O and storage failures remain errors. Each call
+still owns a fresh tree; no persistent execution cache is introduced.
+
+When staging fails, the agent can explicitly call `bash` with
+`"read_only": true` to run `ls`, `du`, `git status`, or other diagnostics without
+copying either root. All original files remain read-only, including scratch;
+`$TMPDIR` points to a fresh disposable directory. Its writes are discarded and
+never published. `GIT_OPTIONAL_LOCKS=0` suppresses optional Git index writes.
+The same OS confinement and host-IPC restrictions remain enforced; **network
+effects are not read-only**. This is not an automatic fallback for writable
+commands and cannot use the managed-browser option. Missing confinement still
+blocks execution. Package inspection/search/info also avoid workspace staging
+and use disposable query caches; host installation restrictions are unchanged.
+
+Independent `ls` and `grep` tools need neither a shell nor staging. They include
+hidden/generated files, do not follow symlinks, and report traversal/output
+truncation. `ls` can list recursively and filter with a Go filepath glob; `grep`
+uses a Go regular expression and optional file glob, returns matching line
+numbers, skips binary/files over 1 MiB, and searches at most 32 MiB of file data.
+`**` is not a recursive glob. Narrow the path/glob when a bound is reached.
+Reads outside the workspace remain permitted. `remove` and `move` work only in
+the workspace or active scratch, honor configured tool denies, and must respect
+user authorization for destructive actions. Recursive deletion requires an
+explicit flag; move never replaces an existing destination or crosses write
+roots. Neither can remove/move a write root or follow symlink parents.
+
+There are no ignore rules or persistent writable staging caches. Unrelated WIP
+must not be deleted to work around a failure. The confined recovery path and
+optional budgets preserve the existing private-copy write boundary.
+
+### Dependencies and browser automation
 
 The structured `packages` tool lets the model inspect the OS and installed
 supported managers, search packages, read version information, and install

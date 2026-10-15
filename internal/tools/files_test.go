@@ -126,6 +126,9 @@ func TestReadRejectsBinaryAndUnknownArgs(t *testing.T) {
 	if _, err := rd.Run(context.Background(), args(t, map[string]any{"path": "missing"})); err == nil {
 		t.Fatal("missing file accepted")
 	}
+	if _, err := rd.Run(context.Background(), args(t, map[string]any{"path": "."})); err == nil || !strings.Contains(err.Error(), "use the ls tool") {
+		t.Fatalf("directory recovery hint missing: %v", err)
+	}
 }
 
 func TestReadTruncatesLongLinesOnRuneBoundary(t *testing.T) {
@@ -390,7 +393,7 @@ func TestRegistryOrderLookupAndDuplicatePanic(t *testing.T) {
 	for _, tl := range r.All() {
 		names = append(names, tl.Name())
 	}
-	if strings.Join(names, ",") != "read,write,edit,bash,packages" {
+	if strings.Join(names, ",") != "read,write,edit,bash,packages,ls,grep,remove,move" {
 		t.Fatalf("order = %v", names)
 	}
 	if _, ok := r.Get("edit"); !ok {
@@ -399,7 +402,7 @@ func TestRegistryOrderLookupAndDuplicatePanic(t *testing.T) {
 	if _, ok := r.Get("rm"); ok {
 		t.Fatal("unknown tool found")
 	}
-	if ft := r.Fantasy(); len(ft) != 5 {
+	if ft := r.Fantasy(); len(ft) != 9 {
 		t.Fatalf("fantasy tools = %d", len(ft))
 	}
 	defer func() {

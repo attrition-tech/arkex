@@ -89,7 +89,7 @@ func Check(cwd string) Report {
 }
 
 var (
-	knownTop        = []string{"version", "connections", "profiles", "default", "permissions", "ui"}
+	knownTop        = []string{"version", "connections", "profiles", "default", "permissions", "ui", "sandbox"}
 	knownConnection = []string{"name", "kind", "subscription", "api", "baseUrl", "apiKey", "headers", "compat", "models", "disabled"}
 	knownKinds      = []string{string(KindLLMServer), string(KindAPIKey), string(KindSubscription), string(KindRuntime)}
 	knownModel      = []string{"id", "name", "reasoning", "reasoningLevels", "reasoningDefault", "reasoningChecked", "contextWindow", "maxTokens", "cost", "compat", "disabled"}
@@ -190,6 +190,9 @@ func checkFile(path string) []Problem {
 	}
 	if ui, ok := root["ui"].(map[string]any); ok {
 		c.unknownKeys("ui", ui, knownUI)
+	}
+	if sandbox, ok := root["sandbox"].(map[string]any); ok {
+		c.unknownKeys("sandbox", sandbox, []string{"maxBytes", "maxEntries"})
 	}
 	return c.out
 }

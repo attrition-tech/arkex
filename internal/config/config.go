@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/attrition-tech/arkex/internal/tools"
@@ -183,6 +184,13 @@ type UI struct {
 // MouseOn reports the effective mouse setting.
 func (u UI) MouseOn() bool { return u.Mouse == nil || *u.Mouse }
 
+// Sandbox settings are resource budgets, not filesystem permissions. Omitted
+// values inherit; explicitly supplied values must be positive integers.
+type Sandbox struct {
+	MaxBytes   *int64 `json:"maxBytes,omitempty"`
+	MaxEntries *int   `json:"maxEntries,omitempty"`
+}
+
 // Config is the merged arkex configuration.
 type Config struct {
 	// Version is the file format version; see CurrentVersion.
@@ -192,6 +200,9 @@ type Config struct {
 	Default     string                `json:"default,omitempty"`
 	Permissions map[string]Permission `json:"permissions,omitempty"`
 	UI          UI                    `json:"ui,omitempty"`
+	Sandbox     Sandbox               `json:"sandbox,omitempty"`
+
+	sandboxBytesSource, sandboxEntriesSource string
 }
 
 // Dir returns the global config directory (~/.arkex or $ARKEX_HOME).
@@ -237,6 +248,9 @@ func Load(cwd string) (*Config, error) {
 			return nil, err
 		}
 	}
+	if _, err := cfg.SandboxLimits(); err != nil {
+		return nil, err
+	}
 	return cfg, nil
 }
 
@@ -245,6 +259,7 @@ func readInto(path string, cfg *Config) error {
 	if err != nil || part == nil {
 		return err
 	}
+	part.sandboxBytesSource, part.sandboxEntriesSource = path, path
 	cfg.merge(part)
 	return nil
 }
@@ -262,6 +277,7 @@ func readProjectInto(path string, cfg *Config) error {
 	if len(part.Connections) > 0 {
 		return fmt.Errorf("%s: project configs may not define connections; move them to the global config (arkex config path)", path)
 	}
+	part.sandboxBytesSource, part.sandboxEntriesSource = path, path
 	for tool, p := range part.Permissions {
 		if !p.stricter(cfg.Permission(tool)) {
 			delete(part.Permissions, tool)
@@ -284,7 +300,41 @@ func readPart(path string) (*Config, error) {
 	if err := decode(path, b, &part); err != nil {
 		return nil, err
 	}
+	if part.Sandbox.MaxBytes != nil && *part.Sandbox.MaxBytes <= 0 {
+		return nil, fmt.Errorf("%s: sandbox.maxBytes must be a positive integer", path)
+	}
+	if part.Sandbox.MaxEntries != nil && *part.Sandbox.MaxEntries <= 0 {
+		return nil, fmt.Errorf("%s: sandbox.maxEntries must be a positive integer", path)
+	}
 	return &part, nil
+}
+
+// SandboxLimits resolves environment > project > global. Omitted budgets
+// impose no size/count cap; explicit config/environment values must be positive.
+// Values are read at connection/setup time, not from a model's shell exports.
+func (c *Config) SandboxLimits() (tools.SandboxLimits, error) {
+	var limits tools.SandboxLimits
+	if c.Sandbox.MaxBytes != nil {
+		limits.MaxBytes, limits.BytesSource = *c.Sandbox.MaxBytes, c.sandboxBytesSource
+	}
+	if c.Sandbox.MaxEntries != nil {
+		limits.MaxEntries, limits.EntriesSource = *c.Sandbox.MaxEntries, c.sandboxEntriesSource
+	}
+	if value, set := os.LookupEnv("ARKEX_SANDBOX_MAX_BYTES"); set {
+		n, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || n <= 0 {
+			return limits, fmt.Errorf("ARKEX_SANDBOX_MAX_BYTES must be a positive integer byte count")
+		}
+		limits.MaxBytes, limits.BytesSource = n, "ARKEX_SANDBOX_MAX_BYTES"
+	}
+	if value, set := os.LookupEnv("ARKEX_SANDBOX_MAX_ENTRIES"); set {
+		n, err := strconv.Atoi(value)
+		if err != nil || n <= 0 {
+			return limits, fmt.Errorf("ARKEX_SANDBOX_MAX_ENTRIES must be a positive integer")
+		}
+		limits.MaxEntries, limits.EntriesSource = n, "ARKEX_SANDBOX_MAX_ENTRIES"
+	}
+	return limits.Effective()
 }
 
 // stricter reports whether p is more restrictive than other.
@@ -294,6 +344,12 @@ func (p Permission) stricter(other Permission) bool {
 
 func (c *Config) merge(o *Config) {
 	c.Version = CurrentVersion
+	if o.Sandbox.MaxBytes != nil {
+		c.Sandbox.MaxBytes, c.sandboxBytesSource = o.Sandbox.MaxBytes, o.sandboxBytesSource
+	}
+	if o.Sandbox.MaxEntries != nil {
+		c.Sandbox.MaxEntries, c.sandboxEntriesSource = o.Sandbox.MaxEntries, o.sandboxEntriesSource
+	}
 	if o.UI.Mouse != nil {
 		c.UI.Mouse = o.UI.Mouse
 	}

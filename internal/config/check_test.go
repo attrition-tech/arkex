@@ -339,10 +339,83 @@ func TestCheckMergedDefault(t *testing.T) {
 }
 
 func TestCheckCleanFile(t *testing.T) {
-	writeGlobal(t, `{"version": 4, "connections": {"l": {"kind": "llm-server", "api": "openai-compat", "baseUrl": "http://localhost:11434/v1", "apiKey": "x", "models": [{"id": "m"}]}}, "default": "l/m"}`)
+	writeGlobal(t, `{"version": 4, "connections": {"l": {"kind": "llm-server", "api": "openai-compat", "baseUrl": "http://localhost:11434/v1", "apiKey": "x", "models": [{"id": "m"}]}}, "default": "l/m", "sandbox": {"maxBytes": 17179869184, "maxEntries": 500000}}`)
 	r := Check("")
 	if len(r.Problems) != 0 {
 		t.Fatalf("clean config reported:\n%s", problemText(r))
+	}
+}
+
+func TestSandboxBudgetPrecedence(t *testing.T) {
+	for _, key := range []string{"ARKEX_SANDBOX_MAX_BYTES", "ARKEX_SANDBOX_MAX_ENTRIES"} {
+		t.Setenv(key, "")
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := writeGlobal(t, `{"version":4}`)
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits, err := cfg.SandboxLimits()
+	if err != nil || limits.MaxBytes != 0 || limits.MaxEntries != 0 || limits.BytesSource != "" || limits.EntriesSource != "" {
+		t.Fatalf("omitted budgets must not impose a size/count cap: %+v: %v", limits, err)
+	}
+	if err := os.WriteFile(path, []byte(`{"version":4,"sandbox":{"maxBytes":17179869184,"maxEntries":300000}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cwd := writeProject(t, `{"version":4,"sandbox":{"maxBytes":19327352832}}`)
+	cfg, err = Load(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits, err = cfg.SandboxLimits()
+	if err != nil || limits.MaxBytes != 18<<30 || limits.MaxEntries != 300000 || limits.BytesSource != ProjectPath(cwd) || limits.EntriesSource != path {
+		t.Fatalf("per-field project/global merge: %+v: %v", limits, err)
+	}
+	t.Setenv("ARKEX_SANDBOX_MAX_ENTRIES", "500000")
+	limits, err = cfg.SandboxLimits()
+	if err != nil || limits.MaxBytes != 18<<30 || limits.MaxEntries != 500000 || limits.EntriesSource != "ARKEX_SANDBOX_MAX_ENTRIES" {
+		t.Fatalf("entry override erased byte setting: %+v: %v", limits, err)
+	}
+	t.Setenv("ARKEX_SANDBOX_MAX_BYTES", "21474836480")
+	limits, err = cfg.SandboxLimits()
+	if err != nil || limits.MaxBytes != 20<<30 || limits.BytesSource != "ARKEX_SANDBOX_MAX_BYTES" {
+		t.Fatalf("environment precedence: %+v: %v", limits, err)
+	}
+	if err := SetDefault(path, "local/m"); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(path)
+	if err != nil || !strings.Contains(string(b), `"maxBytes": 17179869184`) || !strings.Contains(string(b), `"maxEntries": 300000`) {
+		t.Fatalf("normal config edit lost budgets: %s: %v", b, err)
+	}
+}
+
+func TestRejectInvalidSandboxBudgets(t *testing.T) {
+	writeGlobal(t, `{"version":4}`)
+	for _, key := range []string{"ARKEX_SANDBOX_MAX_BYTES", "ARKEX_SANDBOX_MAX_ENTRIES"} {
+		t.Setenv(key, "")
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, key := range []string{"ARKEX_SANDBOX_MAX_BYTES", "ARKEX_SANDBOX_MAX_ENTRIES"} {
+		for _, value := range []string{"", "0", "-1", "8GiB", "1.5", "9223372036854775808"} {
+			t.Run(key+"="+value, func(t *testing.T) {
+				t.Setenv(key, value)
+				if _, err := Load(""); err == nil || !strings.Contains(err.Error(), key) {
+					t.Fatalf("invalid environment budget accepted: %v", err)
+				}
+			})
+		}
+	}
+	for _, body := range []string{`{"maxBytes":0}`, `{"maxEntries":-1}`, `{"maxBytes":1.5}`, `{"maxBytes":"8GiB"}`, `{"maxBytes":9223372036854775807}`} {
+		cwd := writeProject(t, `{"version":4,"sandbox":`+body+`}`)
+		if _, err := Load(cwd); err == nil {
+			t.Fatalf("invalid project budget accepted: %s", body)
+		}
 	}
 }
 

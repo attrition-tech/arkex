@@ -16,7 +16,10 @@ import (
 
 // Packages separates model-selected dependencies from runtime-owned commands.
 // Only supported installation operations may leave the ordinary write sandbox.
-type Packages struct{ Root, TempDir string }
+type Packages struct {
+	Root, TempDir string
+	Limits        SandboxLimits
+}
 
 func (*Packages) Name() string { return "packages" }
 func (*Packages) Description() string {
@@ -225,8 +228,8 @@ func (t *Packages) trustedManager(name, path string) error {
 	return nil
 }
 
-// Queries run inside the ordinary sandbox. Only the fixed Homebrew install
-// sequence receives a host runner, with private caches beyond model write access.
+// Queries use the read-only sandbox and disposable caches, without copying the
+// workspace. Only the fixed Homebrew install sequence receives a host runner.
 func (t *Packages) packageRunner(ctx context.Context, m packageManager, host bool) (packageRunner, func(), error) {
 	parent := t.TempDir
 	if host {
@@ -264,14 +267,14 @@ func (t *Packages) packageRunner(ctx context.Context, m packageManager, host boo
 			cmd.Dir, cmd.Env = real, env
 		} else {
 			var err error
-			sandbox, err = sandboxCommand(ctx, t.Root, t.TempDir, real, program)
+			sandbox, err = sandboxCommand(ctx, t.Root, t.TempDir, real, t.Limits, true, program)
 			if err != nil {
 				return "", err
 			}
 			defer sandbox.Close()
 			cmd = sandbox.cmd
-			cmd.Env = sandbox.environment(env)
-			cache = sandbox.runtimePath(real)
+			cache = sandbox.scratch
+			cmd.Dir, cmd.Env = cache, packageEnvironment(m, cache)
 		}
 		if m.Name == "dnf" {
 			// This config spelling works in DNF4 and DNF5.

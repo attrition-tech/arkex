@@ -24,7 +24,8 @@ jobs:
       !cancelled() &&
       ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
        (github.event_name == 'push' && needs.verify.result == 'success' && vars.ARKEX_RELEASE_PUBLISH == 'true'))
-    runs-on: ubuntu-latest
+    # Match native CI: the Bubblewrap AppArmor profile is packaged on Ubuntu 24.04.
+    runs-on: ubuntu-24.04
     environment: release
     timeout-minutes: 30
     steps:

@@ -65,7 +65,9 @@ move to a lower version. Per-version directories are immutable; only
 ### Native CI gate
 
 `.github/workflows/ci.yml` builds, vets and tests with the race detector on Linux
-and macOS. Each platform also builds and executes the real CLI against an
+and macOS. Native Linux checks and the R2 publisher use Ubuntu 24.04 explicitly:
+their packaged Bubblewrap AppArmor profile and pinned Playwright setup must not
+change with `ubuntu-latest`. Each platform also builds and executes the real CLI against an
 isolated local fake provider: model listing, streaming print/JSON output, and a
 file-tool round trip. A separate integration check exercises Node/Ruby DNS
 resolution, scratch-local npm/Playwright installation, and an actual headless

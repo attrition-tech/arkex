@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"charm.land/fantasy"
 	"github.com/charmbracelet/x/ansi"
 
@@ -122,17 +123,19 @@ func TestSaveAndResume(t *testing.T) {
 		return Connection{Agent: &agent.Agent{}, Name: selector}, nil
 	}
 	h := &harness{model: m}
+	m.send = h.enqueue
 	ag := &agent.Agent{}
 	m.setSession(Connection{Agent: ag, Name: "local/a"})
 
-	// A turn: submit creates the session; runDone saves it.
+	// A turn: submit creates the session; the worker saves before runDone.
 	m.submit("fix the build", nil)
 	if m.conv == nil {
 		t.Fatal("submit must open a conversation")
 	}
 	ag.SetMessages(sampleMessages())
 	m.usageIn, m.usageOut, m.lastInput = 42, 7, 17
-	m.Update(runDoneMsg{})
+	m.persistence.finish(t.Context(), ag.Messages(), fantasy.Usage{InputTokens: 42, OutputTokens: 7}, 17)
+	h.drive(func() tea.Msg { return runDoneMsg{} })
 	list, err := session.List(m.o.Cwd)
 	if err != nil || len(list) != 1 || list[0].Title != "fix the build" || list[0].Messages != 4 {
 		t.Fatalf("saved list = %+v err = %v", list, err)
@@ -162,7 +165,8 @@ func TestSaveAndResume(t *testing.T) {
 
 	// The next turn appends to the same session file rather than a new one.
 	m.submit("thanks", nil)
-	m.Update(runDoneMsg{})
+	m.persistence.finish(t.Context(), m.sess.Agent.Messages(), fantasy.Usage{}, 17)
+	h.drive(func() tea.Msg { return runDoneMsg{} })
 	if list, _ := session.List(m.o.Cwd); len(list) != 1 || list[0].ID != id {
 		t.Fatalf("resumed session must be updated in place, got %+v", list)
 	}

@@ -262,11 +262,15 @@ func runRoot(ctx context.Context, f rootFlags, args []string) error {
 		if err := prepare(ag, id); err != nil {
 			return err
 		}
+		if conv != nil {
+			ag.Tools.BindHistory(conv.HistoryReader())
+		}
 		// One-shot runs create a recoverable session only if compaction needs
 		// to replace history. Resumed sessions use the same durable boundary.
 		ag.StoreContext = func(ctx context.Context, msgs []fantasy.Message) (string, error) {
 			if conv == nil {
 				conv = session.New(cwd)
+				ag.Tools.BindHistory(conv.HistoryReader())
 			}
 			conv.Model = displayName(ref)
 			level := ag.Model.Ref.Thinking

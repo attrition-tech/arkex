@@ -3,6 +3,7 @@
 Usage: python3 scripts/dev/compact_e2e.py /tmp/arkex /tmp/compact-captures [cases...]
 No credentials or external model calls. Captures retain terminal ANSI for shot tooling.
 """
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -47,9 +48,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if mode in ("oversized", "refuses", "cancel-shortening"):
                 if number == 1 or mode == "refuses":
-                    # Complete and within the stream guard, but over the 4000-byte
-                    # handoff budget. This is the reported failure, not truncation.
-                    text = "Original decision AZ-719; local changes only; no publication authorized. " * 100
+                    # Complete and within the memory guard, but over the 2000-token
+                    # estimated handoff budget of this 16000-token model.
+                    text = "Original decision AZ-719; local changes only; no publication authorized. " * 150
                 if number == 2:
                     shortening.wait(20)
         else:
@@ -64,6 +65,9 @@ class Handler(BaseHTTPRequestHandler):
                 chunk = {"id": "c", "object": "chat.completion.chunk", "model": "m", "created": 1,
                          "choices": [{"index": 0, "delta": delta, "finish_reason": reason}]}
                 self.wfile.write(("data: " + json.dumps(chunk) + "\n\n").encode())
+                if summary and mode == "interrupted" and number == 1:
+                    self.wfile.flush()
+                    return
             self.wfile.write(("data: " + json.dumps({"id": "c", "object": "chat.completion.chunk", "model": "m", "created": 1,
                              "choices": [], "usage": {"prompt_tokens": tokens, "completion_tokens": 12, "total_tokens": tokens + 12}}) + "\n\ndata: [DONE]\n\n").encode())
             self.wfile.flush()
@@ -102,8 +106,11 @@ server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
 thread = threading.Thread(target=server.serve_forever, daemon=True)
 thread.start()
 try:
-    for mode in sys.argv[3:] or ("success", "length", "cancel", "oversized", "refuses", "cancel-shortening", "overflow"):
+    for mode in sys.argv[3:] or ("success", "length", "cancel", "oversized", "refuses", "cancel-shortening", "overflow", "interrupted", "locked-cancel"):
         with tempfile.TemporaryDirectory(prefix="arkex-compact-") as temp:
+            # macOS aliases /var to /private/var. Both launches must use
+            # the same workspace spelling for directory-scoped sessions.
+            temp = os.path.realpath(temp)
             home = Path(temp)
             requests.clear()
             release.clear()
@@ -115,23 +122,35 @@ try:
             cmd = "env -u NO_COLOR -u CLICOLOR -u CLICOLOR_FORCE " + " ".join(shlex.quote(x) for x in [
                 "TERM=xterm-256color", "COLORTERM=truecolor", "HOME=" + temp, "ARKEX_HOME=" + temp,
                 binary, "--no-tools"])
+            locked = None
             try:
                 tmux("new-session", "-d", "-s", "test", "-x", "120", "-y", "30", "-c", temp, cmd)
                 wait(lambda s: "Ask a question, describe a task" in s, "startup")
                 send("Remember AZ-719. Make local changes only; do not publish.")
                 wait(lambda s: "Original decision AZ-719" in s, "first response")
-                send("Continue from that decision.")
-                wait(lambda s: "waiting for model" in s, "compaction phase not visible")
+                if mode == "locked-cancel":
+                    wait(lambda _: bool(list((home / "sessions").glob("*/*.json"))), "first save")
+                    session_path = next((home / "sessions").glob("*/*.json"))
+                    locked = open(str(session_path) + ".lock", "a")
+                    fcntl.flock(locked, fcntl.LOCK_EX)
+                    send("/compact")
+                    wait(lambda s: "saving original history" in s, "save blocked the UI")
+                else:
+                    send("Continue from that decision.")
+                    wait(lambda s: "waiting for model" in s, "compaction phase not visible")
                 capture(mode + "-waiting")
                 session_path = next((home / "sessions").glob("*/*.json"))
                 saved = json.loads(session_path.read_text())
                 saved_before = saved["messages"]
-                assert "Continue from that decision" in json.dumps(saved["messages"]), "current prompt not saved before summary"
-                if mode == "cancel":
+                if mode != "locked-cancel":
+                    assert "Continue from that decision" in json.dumps(saved["messages"]), "current prompt not saved before summary"
+                if mode in ("cancel", "locked-cancel"):
                     tmux("send-keys", "-t", "test", "Escape")
                     wait(lambda s: "Press Esc again" in s, "cancel confirmation")
                     tmux("send-keys", "-t", "test", "Escape")
-                    wait(lambda s: "cancelled" in s and "waiting for model" not in s, "cancel stuck")
+                    started = time.monotonic()
+                    wait(lambda s: "cancelled" in s and "waiting for model" not in s and "saving original history" not in s, "cancel stuck")
+                    assert time.monotonic() - started < 2, "cancel waited for disk or network"
                 release.set()
                 if mode in ("oversized", "refuses", "cancel-shortening"):
                     text = wait(lambda s: "retrying with shorter summary" in s or "summary exceeds the replacement budget" in s, "shortening phase not visible")
@@ -143,7 +162,7 @@ try:
                         tmux("send-keys", "-t", "test", "Escape")
                         wait(lambda s: "cancelled" in s and "retrying with shorter summary" not in s, "shortening cancel stuck")
                     shortening.set()
-                if mode in ("success", "oversized", "overflow"):
+                if mode in ("success", "oversized", "overflow", "interrupted"):
                     wait(lambda s: "CONTINUED_AFTER_COMPACTION" in s, "continuation failed")
                 elif mode == "length":
                     wait(lambda s: "summary incomplete" in s, "truncated summary accepted")
@@ -154,7 +173,7 @@ try:
                 capture(mode + "-done")
                 saved = json.loads(session_path.read_text())
                 assert "AZ-719" in json.dumps(saved["history"]), "original history lost"
-                if mode in ("success", "oversized", "overflow"):
+                if mode in ("success", "oversized", "overflow", "interrupted"):
                     assert "Original conversation history:" in json.dumps(saved["messages"])
                     assert len(requests) == (3 if mode == "success" else 4), len(requests)
                     if mode == "oversized":
@@ -168,9 +187,12 @@ try:
                 else:
                     assert "Original conversation history:" not in json.dumps(saved["messages"])
                     assert saved["messages"] == saved_before, "failed compaction changed active context"
-                    assert len(requests) == (3 if mode in ("refuses", "cancel-shortening") else 2), "failed compaction sent another request"
+                    expected = 1 if mode == "locked-cancel" else (3 if mode in ("refuses", "cancel-shortening") else 2)
+                    assert len(requests) == expected, "failed compaction sent another request"
                 print(f"PASS {mode}: real TUI, phase visible, saved original, replacement/continuation checked", flush=True)
             finally:
+                if locked is not None:
+                    locked.close()
                 release.set()
                 shortening.set()
                 subprocess.run(["tmux", "-L", socket, "kill-server"], capture_output=True)

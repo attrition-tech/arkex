@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -12,52 +11,67 @@ import (
 
 	"github.com/attrition-tech/arkex/internal/agent"
 	"github.com/attrition-tech/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/session"
 )
 
-// The UI owns the session. A worker must receive a durable acknowledgement
-// before replacing context. The lock resolves cancellation racing a save.
-type storeContextMsg struct {
-	ctx      context.Context
-	messages []fantasy.Message
-	done     chan struct{}
-	mu       sync.Mutex
-	finished bool
-	path     string
-	err      error
+// Disk work belongs to the run's worker. Only a committed, immutable snapshot
+// crosses back to the UI, before the worker sends its run-complete message.
+type contextSavedMsg struct {
+	owner *session.Session
+	saved session.Session
+	err   error
 }
 
-func contextStore(send func(tea.Msg)) func(context.Context, []fantasy.Message) (string, error) {
-	return func(ctx context.Context, messages []fantasy.Message) (string, error) {
-		if send == nil {
-			return "", errors.New("session event loop is unavailable")
-		}
-		msg := &storeContextMsg{ctx: ctx, messages: messages, done: make(chan struct{})}
-		send(msg)
-		select {
-		case <-msg.done:
-		case <-ctx.Done():
-		}
-		msg.mu.Lock()
-		defer msg.mu.Unlock()
-		if !msg.finished {
-			return "", ctx.Err()
-		}
-		return msg.path, msg.err
-	}
+type contextPersistence struct {
+	owner *session.Session
+	state session.Session
+	send  func(tea.Msg)
 }
 
-func (m *model) storeContext(msg *storeContextMsg) {
-	msg.mu.Lock()
-	defer msg.mu.Unlock()
-	defer close(msg.done)
-	if err := msg.ctx.Err(); err != nil {
-		msg.err = err
-	} else if m.conv == nil {
-		msg.err = errors.New("session is unavailable")
-	} else {
-		msg.path, msg.err = m.conv.SaveContext(msg.ctx, msg.messages)
+func (p *contextPersistence) store(ctx context.Context, messages []fantasy.Message) (string, error) {
+	if p.send == nil {
+		return "", errors.New("session event loop is unavailable")
 	}
-	msg.finished = true
+	path, err := p.state.SaveContext(ctx, messages)
+	if err != nil {
+		return "", err
+	}
+	// Do not turn a committed save into failure when cancellation races it.
+	// SaveContext copies slices before changing them, so subsequent saves
+	// cannot mutate this snapshot while the UI consumes it.
+	p.send(contextSavedMsg{owner: p.owner, saved: p.state})
+	return path, nil
+}
+
+// Finish on the same worker as compaction, before announcing run completion.
+// Otherwise the final usage save can block the UI on the very lock that Esc
+// just cancelled. A cancelled run gets a short best-effort save of partial work.
+func (p *contextPersistence) finish(ctx context.Context, messages []fantasy.Message, usage fantasy.Usage, lastInput int64) {
+	if p.send == nil {
+		return
+	}
+	if ctx.Err() != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.WithoutCancel(ctx), 250*time.Millisecond)
+		defer cancel()
+	}
+	next := p.state
+	next.History = append([]fantasy.Message(nil), next.History...)
+	next.Update(messages, session.Usage{Model: next.Model, Input: next.UsageIn + usage.InputTokens, Output: next.UsageOut + usage.OutputTokens})
+	next.LastInput = lastInput
+	err := next.SaveWithContext(ctx)
+	p.send(contextSavedMsg{owner: p.owner, saved: next, err: err})
+}
+
+func (m *model) contextSaved(msg contextSavedMsg) {
+	if m.conv == msg.owner {
+		if msg.err != nil {
+			m.appendSystem("could not save the session: " + msg.err.Error())
+			m.refresh()
+		} else {
+			*m.conv = msg.saved
+		}
+	}
 }
 
 // compact is the manual /compact: it summarises the whole conversation in
@@ -99,6 +113,7 @@ func (m *model) compact() tea.Cmd {
 	m.cancel = cancel
 	ag := m.sess.Agent
 	send := m.send
+	persistence := m.persistence
 	done := make(chan struct{})
 	m.runDone = done
 	return tea.Batch(func() tea.Msg {
@@ -106,12 +121,12 @@ func (m *model) compact() tea.Cmd {
 		co := newCoalescer(send)
 		res, err := ag.CompactWithProgress(ctx, co.push)
 		co.flush()
+		persistence.finish(ctx, ag.Messages(), res.Usage, ag.LastInput())
 		return compactDoneMsg{res: res, err: err}
 	}, m.workingTick())
 }
 
-// compactDone records the outcome of a manual /compact in the transcript
-// and persists the shorter conversation.
+// compactDone records a manual /compact's outcome after the worker has saved.
 func (m *model) compactDone(msg compactDoneMsg) tea.Cmd {
 	m.disarmConfirmation()
 	m.running = false
@@ -124,7 +139,6 @@ func (m *model) compactDone(msg compactDoneMsg) tea.Cmd {
 	case msg.err != nil:
 		m.appendSystem("compaction failed; original context preserved: " + msg.err.Error())
 	}
-	m.saveConv()
 	m.refresh()
 	return m.finishPromptAction()
 }

@@ -393,7 +393,7 @@ func TestRegistryOrderLookupAndDuplicatePanic(t *testing.T) {
 	for _, tl := range r.All() {
 		names = append(names, tl.Name())
 	}
-	if strings.Join(names, ",") != "read,write,edit,bash,packages,ls,grep,remove,move" {
+	if strings.Join(names, ",") != "read,history,write,edit,bash,packages,ls,grep,remove,move" {
 		t.Fatalf("order = %v", names)
 	}
 	if _, ok := r.Get("edit"); !ok {
@@ -402,7 +402,7 @@ func TestRegistryOrderLookupAndDuplicatePanic(t *testing.T) {
 	if _, ok := r.Get("rm"); ok {
 		t.Fatal("unknown tool found")
 	}
-	if ft := r.Fantasy(); len(ft) != 9 {
+	if ft := r.Fantasy(); len(ft) != 10 {
 		t.Fatalf("fantasy tools = %d", len(ft))
 	}
 	defer func() {

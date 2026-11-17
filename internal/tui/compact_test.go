@@ -81,17 +81,27 @@ func jsonReply(text string) string {
 // model just before each returned message, in program order.
 type harness struct {
 	*model
+	mu     sync.Mutex // coalescer timers can send while the worker saves
 	queued []tea.Msg
+}
+
+func (h *harness) enqueue(msg tea.Msg) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.queued = append(h.queued, msg)
 }
 
 // drive runs a command synchronously and feeds its messages back, like the
 // program would, until nothing is left.
 func (h *harness) drive(cmd tea.Cmd) {
 	for _, msg := range runCmd(cmd) {
-		for _, q := range h.queued {
+		h.mu.Lock()
+		queued := h.queued
+		h.queued = nil
+		h.mu.Unlock()
+		for _, q := range queued {
 			h.Update(q)
 		}
-		h.queued = nil
 		_, next := h.Update(msg)
 		h.drive(next)
 	}
@@ -121,14 +131,7 @@ func fakeAgentModel(t *testing.T, lm *fakeLM, contextWindow int) *harness {
 	m, _ := testModel(t)
 	h := &harness{model: m}
 	m.o.Connect = nil
-	m.send = func(msg tea.Msg) {
-		// A persistence acknowledgement is synchronous, unlike display events.
-		if request, ok := msg.(*storeContextMsg); ok {
-			m.storeContext(request)
-			return
-		}
-		h.queued = append(h.queued, msg)
-	}
+	m.send = h.enqueue
 	ag := &agent.Agent{Model: lmodel, Tools: tools.Default(m.o.Cwd), Policy: agent.AllowAll{}, System: "test"}
 	m.setSession(Connection{Agent: ag, Name: "fake/m"})
 	return h
@@ -231,7 +234,7 @@ func TestAutoCompactBeforePromptWhenContextIsNearlyFull(t *testing.T) {
 	}
 	foundSummary := false
 	for _, b := range m.blocks {
-		if b.name == "context compacted · 2 messages summarised" && strings.HasPrefix(b.text.String(), "Summary: the user said hi.") {
+		if strings.HasPrefix(b.name, "context compacted · 2 messages summarised") && strings.HasPrefix(b.text.String(), "Summary: the user said hi.") {
 			foundSummary = true
 		}
 	}
@@ -323,24 +326,30 @@ func TestContextStoreCancellationAcknowledgesCommittedState(t *testing.T) {
 			m.conv = session.New(t.TempDir())
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
-			var pending *storeContextMsg
-			store := contextStore(func(msg tea.Msg) {
-				pending = msg.(*storeContextMsg)
-				if committed {
-					m.storeContext(pending)
-				}
+			var pending contextSavedMsg
+			persistence := &contextPersistence{owner: m.conv, state: *m.conv, send: func(msg tea.Msg) {
+				pending = msg.(contextSavedMsg)
 				cancel()
-			})
-			path, err := store(ctx, []fantasy.Message{fantasy.NewUserMessage("boundary")})
+			}}
+			if !committed {
+				cancel()
+			}
+			path, err := persistence.store(ctx, []fantasy.Message{fantasy.NewUserMessage("boundary")})
 			if committed {
 				if err != nil || path == "" {
 					t.Fatal("lost durable acknowledgement", err)
+				}
+				if len(m.conv.Messages) != 0 {
+					t.Fatal("worker mutated UI-owned state")
+				}
+				m.contextSaved(pending) // cancellation cannot hide a committed save
+				if len(m.conv.Messages) != 1 {
+					t.Fatal("UI did not adopt committed state")
 				}
 			} else {
 				if !errors.Is(err, context.Canceled) {
 					t.Fatal(err)
 				}
-				m.storeContext(pending) // queued event arrives after cancellation
 				if len(m.conv.Messages) != 0 {
 					t.Fatal("late event committed canceled context")
 				}

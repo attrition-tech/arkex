@@ -268,14 +268,15 @@ type model struct {
 	step           int // current agent step while running
 	ready          bool
 	stickBottom    bool
-	panel          *modelsPanel     // non-nil while the Connections panel is open
-	pal            *palette         // non-nil while the command palette is open
-	mouse          bool             // report mouse events (wheel, clicks)
-	spans          []span           // block line ranges from the last renderBlocks
-	lineBuf        []string         // transcript lines, reused between refreshes
-	conv           *session.Session // current conversation on disk; nil until the first turn
-	hist           *history         // prompt history for this directory
-	shellNotes     []shellNote      // !cmd results waiting to ride along with the next prompt
+	panel          *modelsPanel        // non-nil while the Connections panel is open
+	pal            *palette            // non-nil while the command palette is open
+	mouse          bool                // report mouse events (wheel, clicks)
+	spans          []span              // block line ranges from the last renderBlocks
+	lineBuf        []string            // transcript lines, reused between refreshes
+	conv           *session.Session    // current conversation on disk; nil until the first turn
+	persistence    *contextPersistence // owned by the current run's worker
+	hist           *history            // prompt history for this directory
+	shellNotes     []shellNote         // !cmd results waiting to ride along with the next prompt
 	shellSeq       int
 	welcome        *block // banner block; the transcript is reset to it by /new
 	start          welcomeScreen
@@ -426,8 +427,8 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 		}
 		return m.handleMouse(msg)
 
-	case *storeContextMsg:
-		m.storeContext(msg)
+	case contextSavedMsg:
+		m.contextSaved(msg)
 		return m, nil
 
 	case approvalMsg:
@@ -507,7 +508,6 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 			m.appendSystem(m.responseTiming.footer(time.Now(), false))
 		}
 		m.responseTiming = responseTiming{}
-		m.saveConv()
 		var paused *agent.PausedError
 		if errors.As(msg.err, &paused) {
 			m.paused = true
@@ -952,12 +952,15 @@ func (m *model) prepareAgent() error {
 	}
 	ag := m.sess.Agent
 	ag.System = m.baseSystem
-	ag.StoreContext = contextStore(m.send)
 	m.conv.Model = m.sess.Name
+	m.conv.UsageIn, m.conv.UsageOut = m.usageIn, m.usageOut
 	if ag.Model != nil {
 		level := ag.Model.Ref.Thinking
 		m.conv.Effort = &level
 	}
+	m.persistence = &contextPersistence{owner: m.conv, state: *m.conv, send: m.send}
+	ag.StoreContext = m.persistence.store
+	ag.Tools.BindHistory(m.conv.HistoryReader())
 	if m.o.Prepare != nil {
 		return m.o.Prepare(ag, m.conv.ID)
 	}
@@ -998,6 +1001,7 @@ func (m *model) startRunAt(sentAt time.Time, fn func(context.Context, *agent.Age
 		send = func(tea.Msg) {} // no program (tests): events are dropped
 	}
 	ag := m.sess.Agent
+	persistence := m.persistence
 	done := make(chan struct{})
 	m.runDone = done
 	run := func() tea.Msg {
@@ -1019,6 +1023,7 @@ func (m *model) startRunAt(sentAt time.Time, fn func(context.Context, *agent.Age
 		defer func() { ag.Retry = nil }()
 		err := fn(ctx, ag, co.push)
 		co.flush()
+		persistence.finish(ctx, ag.Messages(), ag.LastUsage(), ag.LastInput())
 		return runDoneMsg{err: err}
 	}
 	return tea.Batch(run, m.workingTick())
@@ -1122,7 +1127,11 @@ func (m *model) applyEvent(e agent.Event) {
 		}
 	case agent.Compacted:
 		m.lastInput = 0
-		m.blocks = append(m.blocks, compactBlock(e.Summary, e.Dropped))
+		b := compactBlock(e.Summary, e.Dropped)
+		if e.BeforeTokens > 0 {
+			b.name += fmt.Sprintf(" · ~%s → ~%s tokens", humanTokens(int64(e.BeforeTokens)), humanTokens(int64(e.AfterTokens)))
+		}
+		m.blocks = append(m.blocks, b)
 		if e.Trimmed > 0 {
 			m.appendSystem(fmt.Sprintf("the %d oldest messages no longer fit and were dropped unsummarised", e.Trimmed))
 		}

@@ -7,9 +7,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"charm.land/fantasy"
+	"github.com/attrition-tech/arkex/internal/agent"
 	"github.com/attrition-tech/arkex/internal/config"
 	"github.com/attrition-tech/arkex/internal/session"
 )
@@ -102,5 +105,77 @@ func TestPrintAndJSONResumeAccumulateUsage(t *testing.T) {
 		if saved.UsageIn != 9+int64(i+1)*17 || saved.UsageOut != 4+int64(i+1)*6 || saved.LastInput != 17 {
 			t.Fatalf("json=%v: usage %d/%d, context %d", jsonMode, saved.UsageIn, saved.UsageOut, saved.LastInput)
 		}
+	}
+}
+
+func TestPrintResumeRecoversArchivedHistoryThroughTools(t *testing.T) {
+	for _, mode := range []string{"text", "attachment", "denied"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("ARKEX_HOME", t.TempDir())
+			cwd := t.TempDir()
+			t.Chdir(cwd)
+			const original = "AZ-719: do not publish without approval."
+			requests := make(chan string, 2)
+			var count atomic.Int32
+			args := `{"query":"AZ-719"}`
+			if mode == "attachment" {
+				args = `{"message":1,"attachment":2}`
+			}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var body json.RawMessage
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+					return
+				}
+				requests <- string(body)
+				w.Header().Set("Content-Type", "text/event-stream")
+				if count.Add(1) == 1 {
+					fmt.Fprintf(w, "data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"h1\",\"type\":\"function\",\"function\":{\"name\":\"history\",\"arguments\":%q}}]}}]}\n\ndata: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n", args)
+				} else {
+					fmt.Fprint(w, "data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Checked saved history.\"}}]}\n\ndata: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+				}
+			}))
+			defer server.Close()
+			cfg := config.Config{Connections: map[string]config.Connection{"local": {API: config.APIOpenAICompat, BaseURL: server.URL + "/v1", Models: []config.Model{{ID: "m"}}}}, Default: "local/m"}
+			if mode == "denied" {
+				cfg.Permissions = map[string]config.Permission{"history": config.PermissionDeny}
+			}
+			path, _ := config.GlobalPath()
+			data, _ := json.Marshal(cfg)
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			s := session.New(cwd)
+			s.Model = "local/m"
+			file := fantasy.FilePart{Filename: "original.png", MediaType: "image/png", Data: []byte{0, 17, 255}}
+			if _, err := s.SaveContext(t.Context(), []fantasy.Message{fantasy.NewUserMessage(strings.Repeat("old text\n", 1000)+original, file)}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.SaveContext(t.Context(), agent.CompactedMessages("Earlier details can be recovered from history.")); err != nil {
+				t.Fatal(err)
+			}
+			if err := runRoot(t.Context(), rootFlags{resume: s.ID, print: "Recover the original evidence"}, nil); err != nil {
+				t.Fatal(err)
+			}
+			if len(requests) != 2 {
+				t.Fatal("history tool did not complete its round trip")
+			}
+			first, second := <-requests, <-requests
+			if strings.Contains(first, original) || strings.Contains(first, "ABH/") {
+				t.Fatal("archive content was reinserted without a retrieval request")
+			}
+			want := original
+			if mode == "attachment" {
+				want = "data:image/png;base64,ABH/"
+			} else if mode == "denied" {
+				want = "denied"
+				if strings.Contains(second, original) {
+					t.Fatal("history bypassed deny permission")
+				}
+			}
+			if !strings.Contains(second, want) {
+				t.Fatalf("missing historical result %q in provider request: %s", want, second)
+			}
+		})
 	}
 }

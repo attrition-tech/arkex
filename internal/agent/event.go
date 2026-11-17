@@ -90,11 +90,13 @@ type CompactProgress struct {
 // before a request that would have run past compactAt of the context
 // window, or to recover from a request the provider rejected as too long.
 type Compacted struct {
-	Summary string        `json:"summary"`
-	Dropped int           `json:"dropped"` // messages the summary replaced
-	Trimmed int           `json:"trimmed"` // messages removed unread to make the summary request fit
-	Reason  string        `json:"reason"`
-	Usage   fantasy.Usage `json:"usage"`
+	Summary      string        `json:"summary"`
+	Dropped      int           `json:"dropped"` // messages the summary replaced
+	Trimmed      int           `json:"trimmed"` // messages removed unread to make the summary request fit
+	Reason       string        `json:"reason"`
+	Usage        fantasy.Usage `json:"usage"`
+	BeforeTokens int           `json:"estimated_before_tokens,omitempty"`
+	AfterTokens  int           `json:"estimated_after_tokens,omitempty"`
 }
 
 // CompactFailed fires when pre-request compaction stops the run safely.

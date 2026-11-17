@@ -323,27 +323,44 @@ manually. `ctx*` means the model's limit is assumed, not confirmed. The trigger
 estimates the upcoming request, including instructions, tool definitions, new
 messages and output headroom. Token estimates are not exact.
 
-Compaction saves the original context first, summarizes older text in bounded
-chronological chunks, and retains a bounded recent suffix plus the fresh user
-prompt. Tool calls and their results stay together. Attachments remain attached
-verbatim rather than being converted to base64 text for summarization.
-The handoff includes a readable original-history reference so the agent can
-recover omitted details; summaries themselves are not guaranteed lossless.
+Compaction saves the original context first, then normally makes **one**
+tools-disabled summarization request with dedicated handoff instructions. It
+retains the fresh user prompt and up to two recent complete exchanges within a
+model-scaled budget; tool calls and results stay together. Bulky older tool
+output is excerpted, and older attachments stay in the archive rather than
+being reinserted into every request. Only histories too large for the selected
+model are split into bounded, message-aware segments. The summary budget is
+estimated in tokens, not a separate 8 KiB text limit.
 
-The footer shows the observed phase, request number and elapsed time. Each
-summary request has a 90-second deadline; the whole operation has a five-minute
-deadline and a 32-request cap, including at most one smaller-chunk overflow
-retry. Esc twice cancels. Incomplete, oversized or unusable summaries and failed
-saves leave the original context active. An automatic failure stops the run
-instead of silently sending the oversized request again. Retry `/compact` or
-switch models after addressing the reported error.
+The read-only `history` tool searches this session's saved original messages
+and returns stable message numbers and UTF-8 byte offsets for paginated reads.
+It can recover exact long text, tool output and individually requested
+attachments after restart or repeated compaction. An edited branch sees only
+its own history, not later messages from the parent. Historical text is evidence,
+not new instructions or authorization. Summaries remain lossy and automatic
+recall is not guaranteed; the tool makes omitted source details recoverable.
+Set `"history": "deny"` in permissions to disable it, or use `--no-tools`.
+
+The footer shows the phase, request number and elapsed time; the completed card
+shows **estimated** before/after context sizes. A stream may continue beyond
+90 seconds while it is making progress; 90 seconds without text/reasoning
+progress stops an attempt. The whole operation has a five-minute deadline and
+a 32-request recovery cap. Transient/incomplete streams retry at most twice per
+segment, provider overflows can shrink the input up to three times, and an
+over-budget completed handoff gets one shorter retry of the same source.
+Esc twice cancels, including while waiting for a session-file lock. Session
+saves run off the UI loop and the replacement must save before adoption.
+Unsuccessful compaction leaves the original context active. An automatic
+failure stops the run instead of resending an oversized request indefinitely;
+retry `/compact` or switch models after addressing the reported error.
 
 Private history snapshots live under the workspace's session directory in
 `context-history/<session-id>/`. Their references survive resume and repeated
 compaction. Snapshots are retained separately, including after deleting a
 session file, because edited branches can still refer to them. One-shot print
 runs normally remain unsaved, but create a recoverable session if compaction
-is needed. Recovery through tools still respects configured read permissions.
+is needed. The session-scoped `history` tool is preferred for exact retrieval;
+raw snapshot reads remain available through permitted filesystem tools.
 
 ## Build from source
 

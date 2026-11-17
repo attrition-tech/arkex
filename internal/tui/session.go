@@ -15,8 +15,8 @@ import (
 
 const recentSessions = 5
 
-// saveConv persists the current conversation. Called after every run; the
-// session file is created on the first saved turn.
+// saveConv persists idle session changes. Runs save through contextPersistence
+// on their worker so disk locks cannot freeze the event loop.
 func (m *model) saveConv() {
 	if m.conv == nil || m.sess.Agent == nil {
 		return

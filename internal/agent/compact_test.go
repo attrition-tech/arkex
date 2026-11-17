@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"reflect"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 	"unicode/utf8"
 
@@ -115,7 +117,7 @@ func TestCompactChunksCoverAllHistoryIncludingRetry(t *testing.T) {
 	var first string
 	lm.respond = func(_ context.Context, call fantasy.Call, n int) (fantasy.StreamResponse, error) {
 		text := call.Prompt[1].Content[0].(fantasy.TextPart).Text
-		_, chunk, ok := strings.Cut(text, "Next history chunk (JSON data, possibly a fragment):\n")
+		_, chunk, ok := strings.Cut(text, "Chronological transcript:\n")
 		if !ok || !utf8.ValidString(chunk) {
 			t.Fatal("invalid history chunk")
 		}
@@ -126,15 +128,15 @@ func TestCompactChunksCoverAllHistoryIncludingRetry(t *testing.T) {
 		if n == 2 && (len(chunk) >= len(first) || !strings.HasPrefix(first, chunk)) {
 			t.Fatal("overflow retry did not shrink the same unread chunk")
 		}
-		read.WriteString(chunk)
+		read.WriteString(strings.TrimPrefix(chunk, "[Continuation of preceding message]\n"))
 		return summaryResponse("Both sentinels and the user constraints are important.", fantasy.FinishReasonStop), nil
 	}
 	res, err := a.Compact(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, _ := json.Marshal(before)
-	if read.String() != string(want) || res.Trimmed != 0 || len(lm.calls) < 3 {
+	want := before[0].Content[0].(fantasy.TextPart).Text
+	if !strings.Contains(read.String(), want) || res.Trimmed != 0 || len(lm.calls) < 3 {
 		t.Fatal("history bytes skipped or duplicated")
 	}
 	if res.Usage.InputTokens != int64((len(lm.calls)-1)*17) {
@@ -148,9 +150,8 @@ func TestCompactShortensCompleteSummary(t *testing.T) {
 	a.SetMessages(before)
 	lm.respond = func(_ context.Context, _ fantasy.Call, n int) (fantasy.StreamResponse, error) {
 		if n == 1 {
-			// Complete, below the stream-size guard, but over the 2048-byte
-			// replacement budget. A provider token cap does not enforce bytes.
-			return summaryResponse(strings.Repeat("Earlier work remains pending. ", 100), fantasy.FinishReasonStop), nil
+			// Complete, but larger than the estimated 1024-token allowance.
+			return summaryResponse(strings.Repeat("Earlier work remains pending. ", 150), fantasy.FinishReasonStop), nil
 		}
 		return summaryResponse("AZ-719: local changes only; publication is not authorized; verification remains pending.", fantasy.FinishReasonStop), nil
 	}
@@ -186,10 +187,10 @@ func TestCompactRejectsBadResponsesWithoutReplacingHistory(t *testing.T) {
 				case "oversized":
 					return summaryResponse(strings.Repeat("x", 9000), fantasy.FinishReasonStop), nil
 				case "summary budget":
-					return summaryResponse(strings.Repeat("x", 2049), fantasy.FinishReasonStop), nil
+					return summaryResponse(strings.Repeat("x", 4000), fantasy.FinishReasonStop), nil
 				case "cancel shortening":
 					if n == 1 {
-						return summaryResponse(strings.Repeat("x", 3000), fantasy.FinishReasonStop), nil
+						return summaryResponse(strings.Repeat("x", 4000), fantasy.FinishReasonStop), nil
 					}
 					cancel()
 					return nil, ctx.Err()
@@ -211,8 +212,8 @@ func TestCompactRejectsBadResponsesWithoutReplacingHistory(t *testing.T) {
 			if kind == "cancel shortening" && !errors.Is(err, context.Canceled) {
 				t.Fatalf("shortening cancellation lost: %v", err)
 			}
-			if len(lm.calls) > 2 {
-				t.Fatal("unbounded shortening attempts")
+			if len(lm.calls) > 3 {
+				t.Fatal("unbounded recovery attempts")
 			}
 			loaded, err := session.Load(s.Cwd, s.ID)
 			if err != nil || !reflect.DeepEqual(loaded.Messages, before) {
@@ -269,7 +270,7 @@ func TestCompactDeadlineAndRequestLimit(t *testing.T) {
 	a.SetMessages([]fantasy.Message{textMsg(fantasy.MessageRoleUser, 2000)})
 	lm.respond = func(ctx context.Context, _ fantasy.Call, _ int) (fantasy.StreamResponse, error) {
 		deadline, ok := ctx.Deadline()
-		if !ok || time.Until(deadline) > compactRequestDeadline {
+		if !ok || time.Until(deadline) > compactDeadline {
 			t.Error("unbounded summary request")
 		}
 		<-ctx.Done()
@@ -284,11 +285,11 @@ func TestCompactDeadlineAndRequestLimit(t *testing.T) {
 		lm.calls = nil
 		lm.respond = func(_ context.Context, _ fantasy.Call, n int) (fantasy.StreamResponse, error) {
 			if shorten && n%2 == 1 {
-				return summaryResponse(strings.Repeat("x", 1500), fantasy.FinishReasonStop), nil
+				return summaryResponse(strings.Repeat("x", 2100), fantasy.FinishReasonStop), nil
 			}
 			return summaryResponse("S", fantasy.FinishReasonStop), nil
 		}
-		a.SetMessages([]fantasy.Message{textMsg(fantasy.MessageRoleUser, 200000)})
+		a.SetMessages([]fantasy.Message{textMsg(fantasy.MessageRoleUser, 500000)})
 		if _, err := a.Compact(t.Context()); err == nil || !strings.Contains(err.Error(), "request limit") || len(lm.calls) != compactMaxRequests {
 			t.Fatalf("unbounded chunks (shortening=%v): %d %v", shorten, len(lm.calls), err)
 		}
@@ -427,26 +428,30 @@ func TestCompactedHistoryFileIsPrivate(t *testing.T) {
 	}
 }
 
-func TestCompactRetainsAttachmentsAcrossRepeatedCompaction(t *testing.T) {
-	a, lm, _ := compactAgent(t, 32768)
+func TestCompactArchivesAttachmentsAcrossRepeatedCompaction(t *testing.T) {
+	a, lm, s := compactAgent(t, 32768)
 	file := fantasy.FilePart{Filename: "evidence.png", MediaType: "image/png", Data: []byte(strings.Repeat("image bytes", 100000))}
 	a.SetMessages([]fantasy.Message{fantasy.NewUserMessage("Inspect this evidence", file)})
 	for range 2 {
-		res, err := a.Compact(t.Context())
+		_, err := a.Compact(t.Context())
 		if err != nil {
 			t.Fatal(err)
 		}
 		parts := a.Messages()[0].Content
-		if len(parts) != 2 || !reflect.DeepEqual(parts[1], file) {
-			t.Fatal("attachment changed, lost or duplicated")
+		if len(parts) != 1 {
+			t.Fatal("old attachment still consumes active context")
 		}
-		data, err := os.ReadFile(res.HistoryPath)
+		loaded, err := session.Load(s.Cwd, s.ID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		var history []fantasy.Message
-		if err := json.Unmarshal(data, &history); err != nil || !reflect.DeepEqual(history[0].Content[1], file) {
-			t.Fatal("original attachment not archived", err)
+		if !reflect.DeepEqual(loaded.History[0].Content[1], file) {
+			t.Fatal("original attachment not archived")
+		}
+		history := &tools.History{Load: loaded.HistoryReader()}
+		result, err := history.Run(t.Context(), json.RawMessage(`{"message":1,"attachment":2}`))
+		if err != nil || result.Media == nil || result.Media.MediaType != "image/png" || result.Media.Data == "" {
+			t.Fatal("cannot retrieve original attachment after restart", err)
 		}
 	}
 	if len(lm.calls) != 2 {
@@ -454,7 +459,7 @@ func TestCompactRetainsAttachmentsAcrossRepeatedCompaction(t *testing.T) {
 	}
 	for _, call := range lm.calls {
 		wire, _ := json.Marshal(call.Prompt)
-		if len(wire) > 5000 || !strings.Contains(string(wire), "evidence.png") {
+		if len(wire) > 5000 {
 			t.Fatal("binary data fed to text summarizer")
 		}
 	}
@@ -501,7 +506,7 @@ func TestCompactionInstallsItsOwnDeadlines(t *testing.T) {
 	}
 	lm.respond = func(ctx context.Context, _ fantasy.Call, _ int) (fantasy.StreamResponse, error) {
 		deadline, ok := ctx.Deadline()
-		if left := time.Until(deadline); !ok || left < 80*time.Second || left > 90*time.Second {
+		if left := time.Until(deadline); !ok || left < 4*time.Minute || left > 5*time.Minute {
 			t.Fatalf("request deadline: %v %v", ok, left)
 		}
 		return summaryResponse("S", fantasy.FinishReasonStop), nil
@@ -527,5 +532,111 @@ func TestLearnedContextCanBeReadDuringCompaction(t *testing.T) {
 	<-done
 	if a.ContextWindow() != 9191 || a.Model.Ref.Model.ContextWindow != 8192 {
 		t.Fatal("learned window must not mutate shared provider options")
+	}
+}
+
+func TestCompactLargeHistoryAndCompleteHandoffUseOneRequest(t *testing.T) {
+	a, lm, s := compactAgent(t, 1000000)
+	a.System = "NORMAL_AGENT_INSTRUCTIONS_MUST_NOT_RUN_DURING_SUMMARIZATION"
+	source := strings.Repeat("User constraints, actions, evidence, follow-up. ", 50000) + "FINAL_EVIDENCE_719"
+	a.SetMessages([]fantasy.Message{fantasy.NewUserMessage(source)})
+	summary := strings.Repeat("The work still needs verification. ", 280) // 9,800 bytes, below 4,096 estimated tokens
+	lm.respond = func(_ context.Context, call fantasy.Call, _ int) (fantasy.StreamResponse, error) {
+		wire, _ := json.Marshal(call.Prompt)
+		if strings.Contains(string(wire), a.System) || !strings.Contains(string(wire), "FINAL_EVIDENCE_719") || len(call.Tools) != 0 {
+			t.Fatal("summary included agent instructions/tools or omitted history")
+		}
+		return summaryResponse(summary, fantasy.FinishReasonStop), nil
+	}
+	res, err := a.Compact(t.Context())
+	if err != nil || len(lm.calls) != 1 || !strings.Contains(res.Summary, strings.TrimSpace(summary)) {
+		t.Fatal("fitting history or handoff unnecessarily rejected/chunked", err, len(lm.calls))
+	}
+	loaded, err := session.Load(s.Cwd, s.ID)
+	if err != nil || loaded.History[0].Content[0].(fantasy.TextPart).Text != source || !reflect.DeepEqual(loaded.Messages, a.Messages()) {
+		t.Fatal("compaction lost original or committed inconsistent context", err)
+	}
+}
+
+func TestCompactRetriesInterruptedStreamWithoutInstallingPartialText(t *testing.T) {
+	a, lm, _ := compactAgent(t, 16384)
+	a.SetMessages([]fantasy.Message{fantasy.NewUserMessage("Keep the original decision")})
+	lm.respond = func(_ context.Context, _ fantasy.Call, n int) (fantasy.StreamResponse, error) {
+		if n == 1 {
+			return func(yield func(fantasy.StreamPart) bool) {
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: "PARTIAL_MUST_NOT_SURVIVE"})
+				yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeError, Error: io.ErrUnexpectedEOF})
+			}, nil
+		}
+		return summaryResponse("Keep the original decision; verification remains pending.", fantasy.FinishReasonStop), nil
+	}
+	res, err := a.Compact(t.Context())
+	if err != nil || len(lm.calls) != 2 || strings.Contains(res.Summary, "PARTIAL_MUST_NOT_SURVIVE") || !strings.Contains(res.Summary, "verification remains pending") {
+		t.Fatal("interrupted summary was not safely retried", err)
+	}
+}
+
+func TestCompactionAllowsLongActiveStreamsButBoundsStalls(t *testing.T) {
+	for _, active := range []bool{true, false} {
+		t.Run(fmt.Sprint(active), func(t *testing.T) {
+			a, lm, _ := compactAgent(t, 16384)
+			before := []fantasy.Message{fantasy.NewUserMessage("Preserve this unfinished task")}
+			a.SetMessages(before)
+			lm.respond = func(ctx context.Context, _ fantasy.Call, _ int) (fantasy.StreamResponse, error) {
+				return func(yield func(fantasy.StreamPart) bool) {
+					if !active {
+						<-ctx.Done()
+						return
+					}
+					for range 3 {
+						select {
+						case <-ctx.Done():
+							return
+						case <-time.After(time.Minute):
+							if !yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeTextDelta, Delta: "The task remains unfinished. "}) {
+								return
+							}
+						}
+					}
+					yield(fantasy.StreamPart{Type: fantasy.StreamPartTypeFinish, FinishReason: fantasy.FinishReasonStop})
+				}, nil
+			}
+			synctest.Test(t, func(t *testing.T) {
+				started := time.Now()
+				_, err := a.Compact(t.Context())
+				if active {
+					if err != nil || len(lm.calls) != 1 || time.Since(started) < 3*time.Minute {
+						t.Fatal("active stream was cut off or retried", err, len(lm.calls))
+					}
+				} else if err == nil || len(lm.calls) != 3 || time.Since(started) > 5*time.Minute || !reflect.DeepEqual(a.Messages(), before) {
+					t.Fatal("stall was not bounded or damaged context", err, len(lm.calls))
+				}
+			})
+		})
+	}
+}
+
+func TestCompactLargeToolEvidenceRemainsRetrievable(t *testing.T) {
+	a, lm, s := compactAgent(t, 32768)
+	a.SetMessages([]fantasy.Message{
+		fantasy.NewUserMessage("Check the failing build"),
+		{Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.ToolCallPart{ToolCallID: "build", ToolName: "bash", Input: `{"command":"test"}`}}},
+		{Role: fantasy.MessageRoleTool, Content: []fantasy.MessagePart{fantasy.ToolResultPart{ToolCallID: "build", Output: fantasy.ToolResultOutputContentText{Text: strings.Repeat("build log\n", 40000) + "MID_LOG_EVIDENCE_719" + strings.Repeat("more log\n", 40000)}}}},
+	})
+	for range 2 {
+		if _, err := a.Compact(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, call := range lm.calls {
+		wire, _ := json.Marshal(call.Prompt)
+		if len(wire) > 20000 {
+			t.Fatal("old bulk tool output was sent to the summarizer")
+		}
+	}
+	history := &tools.History{Load: s.HistoryReader()}
+	got, err := history.Run(t.Context(), json.RawMessage(`{"query":"MID_LOG_EVIDENCE_719"}`))
+	if err != nil || !strings.Contains(got.Output, "MID_LOG_EVIDENCE_719") {
+		t.Fatal("excerpting made original evidence inaccessible", err)
 	}
 }

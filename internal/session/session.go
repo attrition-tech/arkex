@@ -132,11 +132,46 @@ func (s *Session) SaveContext(ctx context.Context, msgs []fantasy.Message) (stri
 	if err := fileutil.Write(archive, data); err != nil {
 		return "", err
 	}
-	if err := next.save(ctx); err != nil {
+	if err := next.SaveWithContext(ctx); err != nil {
 		return "", err
 	}
 	*s = next
 	return archive, nil
+}
+
+// HistoryReader binds recovery to this session's saved, append-only history.
+// Capture identity now: the UI can adopt newer session snapshots while a tool
+// reads the atomically replaced file. Forks have their own bounded history.
+func (s *Session) HistoryReader() func(context.Context) ([]fantasy.Message, error) {
+	cwd, id := s.Cwd, s.ID
+	return func(ctx context.Context) ([]fantasy.Message, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		dir, err := Dir(cwd)
+		if err != nil {
+			return nil, err
+		}
+		f, err := os.Open(filepath.Join(dir, id+".json"))
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		var saved struct {
+			History  []fantasy.Message `json:"history"`
+			Messages []fantasy.Message `json:"messages"`
+		}
+		if err := json.NewDecoder(f).Decode(&saved); err != nil {
+			return nil, err
+		}
+		if len(saved.History) != 0 {
+			return saved.History, ctx.Err()
+		}
+		return saved.Messages, ctx.Err() // pre-checkpoint session format
+	}
 }
 
 // TitleFor derives a title from the first line of the first user message.
@@ -179,10 +214,12 @@ var ErrConflict = errors.New("session changed in another process; disk left unch
 // Save writes the session atomically. Empty branches are intentional and saved;
 // simply opening arkex and quitting still leaves nothing behind.
 func (s *Session) Save() error {
-	return s.save(context.Background())
+	return s.SaveWithContext(context.Background())
 }
 
-func (s *Session) save(ctx context.Context) error {
+// SaveWithContext observes cancellation while preparing and waiting for a
+// writer. Once the atomic replacement commits, it acknowledges that commit.
+func (s *Session) SaveWithContext(ctx context.Context) error {
 	if len(s.Messages) == 0 && s.ParentID == "" {
 		return nil
 	}

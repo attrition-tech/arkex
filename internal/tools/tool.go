@@ -29,6 +29,9 @@ type Tool interface {
 type Result struct {
 	// Output is the text the model sees.
 	Output string
+	// Media restores a specifically requested historical attachment. Output
+	// remains the printable description, never the encoded binary payload.
+	Media *fantasy.ToolResultOutputContentMedia
 	// Summary is a short one-line description for the UI (optional).
 	Summary string
 	// Detail is extra text for the UI only, never sent to the model: for
@@ -79,6 +82,15 @@ func (r *Registry) Fantasy() []fantasy.Tool {
 	return out
 }
 
+// BindHistory connects the read-only history tool to its owning session.
+func (r *Registry) BindHistory(load func(context.Context) ([]fantasy.Message, error)) {
+	if r != nil {
+		if t, ok := r.byName["history"].(*History); ok {
+			t.Load = load
+		}
+	}
+}
+
 // Default returns the built-in tool set rooted at dir.
 func Default(dir string, limits ...SandboxLimits) *Registry {
 	var budget SandboxLimits
@@ -87,6 +99,7 @@ func Default(dir string, limits ...SandboxLimits) *Registry {
 	}
 	return NewRegistry(
 		&Read{Root: dir},
+		&History{},
 		&Write{Root: dir},
 		&Edit{Root: dir},
 		&Bash{Dir: dir, Limits: budget},

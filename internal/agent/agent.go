@@ -410,9 +410,13 @@ func (a *Agent) execute(ctx context.Context, calls []fantasy.ToolCallPart, emit 
 		if isErr {
 			results = append(results, errPart(call.ID, errors.New(res.Output)))
 		} else {
+			var output fantasy.ToolResultOutputContent = fantasy.ToolResultOutputContentText{Text: res.Output}
+			if res.Media != nil {
+				output = *res.Media
+			}
 			results = append(results, fantasy.ToolResultPart{
 				ToolCallID: call.ID,
-				Output:     fantasy.ToolResultOutputContentText{Text: res.Output},
+				Output:     output,
 			})
 		}
 	}

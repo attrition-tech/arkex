@@ -611,8 +611,7 @@ func TestSandboxDirectorySubstitution(t *testing.T) {
 						_ = unix.Close(fd)
 					}
 				}
-				<-done
-				t.Fatal("directory substitution blocked snapshot traversal")
+				t.Fatalf("directory substitution blocked snapshot traversal: %v", <-done)
 			}
 		})
 	}

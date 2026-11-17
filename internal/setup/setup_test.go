@@ -94,65 +94,23 @@ func TestGuessModel(t *testing.T) {
 		}
 	}
 	// Provider-level preset compat must not be duplicated per model.
-	var openrouter Preset
-	for _, p := range Presets {
-		if p.ID == "openrouter" {
-			openrouter = p
-		}
-	}
-	if m := GuessModel("deepseek/deepseek-r1", openrouter); m.Compat.Thinking != "" || !m.Reasoning {
-		t.Errorf("openrouter deepseek = %+v", m)
-	}
-}
-
-func TestDetectPreset(t *testing.T) {
-	cases := map[string]string{
-		"https://openrouter.ai/api/v1": "openrouter",
-		"https://API.OPENAI.com/v1":    "openai",
-		"http://localhost:11434/v1":    "ollama",
-		"http://localhost:8000/v1":     "vllm",
-		"http://localhost:9999/v1":     "other-server", // loopback, unknown port
-		"http://127.0.0.1:8765/v1":     "other-server",
-		"https://llm.matrx.example/v1": "other-api",
-		"not a url":                    "other-server",
-	}
-	for in, want := range cases {
-		if got := DetectPreset(in).ID; got != want {
-			t.Errorf("DetectPreset(%q) = %s, want %s", in, got, want)
-		}
+	custom.Compat.Thinking = config.ThinkingOpenRouter
+	if m := GuessModel("deepseek/deepseek-r1", custom); m.Compat.Thinking != "" || !m.Reasoning {
+		t.Errorf("custom reasoning compat = %+v", m)
 	}
 }
 
 func TestPresetsFor(t *testing.T) {
-	seen := map[string]bool{}
-	for _, p := range Presets {
-		if seen[p.ID] {
-			t.Errorf("duplicate preset id %q", p.ID)
-		}
-		seen[p.ID] = true
-		if p.Kind == "" {
-			t.Errorf("preset %q has no kind", p.ID)
-		}
+	if len(Presets) != 2 {
+		t.Fatalf("expected only Other and ChatGPT, got %v", Presets)
 	}
-	for _, kind := range []config.Kind{config.KindLLMServer, config.KindAPIKey} {
-		ps := PresetsFor(kind)
-		if len(ps) < 2 {
-			t.Fatalf("%s: %d presets", kind, len(ps))
-		}
-		for _, p := range ps {
-			if p.Kind != kind {
-				t.Errorf("%s list contains %q of kind %s", kind, p.ID, p.Kind)
-			}
-		}
-		if last := ps[len(ps)-1]; last.Label != "Other" || last.BaseURL != "" {
-			t.Errorf("%s: last preset %+v is not the Other catch-all", kind, last)
-		}
-		if Other(kind).ID != ps[len(ps)-1].ID {
-			t.Errorf("Other(%s) = %s", kind, Other(kind).ID)
-		}
+	servers := PresetsFor(config.KindLLMServer)
+	if len(servers) != 1 || servers[0].Label != "Other" || servers[0].BaseURL != "" || servers[0].Compat.Thinking != "" {
+		t.Fatalf("server choices = %+v", servers)
 	}
-	if FindPreset("openai").BaseURL != "https://api.openai.com/v1" {
-		t.Error("FindPreset(openai)")
+	subscriptions := PresetsFor(config.KindSubscription)
+	if len(subscriptions) != 1 || subscriptions[0].ID != "chatgpt" || subscriptions[0].Label != "ChatGPT" || subscriptions[0].BaseURL == "" {
+		t.Fatalf("subscription choices = %+v", subscriptions)
 	}
 	if FindPreset("nope").ID != "other-server" {
 		t.Errorf("FindPreset(nope) = %s", FindPreset("nope").ID)

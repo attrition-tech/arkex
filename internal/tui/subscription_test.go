@@ -190,7 +190,7 @@ func TestSubscriptionAddSignInPickSave(t *testing.T) {
 	m, sel, fake, opened := subscriptionModel(t)
 	p := m.panel
 
-	typeKeys(m, "a", "right", "right") // kind → Subscription
+	typeKeys(m, "a", "right") // kind → Subscription
 	f := p.form
 	if p.formKind() != config.KindSubscription || f.value("name") != "chatgpt" || p.preset.ID != "chatgpt" {
 		t.Fatalf("subscription prefill: kind=%v name=%q preset=%s", p.formKind(), f.value("name"), p.preset.ID)
@@ -284,7 +284,7 @@ func TestSubscriptionAddSignInPickSave(t *testing.T) {
 func TestSubscriptionLoginCancelAndCatalogFallback(t *testing.T) {
 	m, _, fake, _ := subscriptionModel(t)
 	p := m.panel
-	typeKeys(m, "a", "right", "right", "tab", "tab", "tab", "tab")
+	typeKeys(m, "a", "right", "tab", "tab", "tab", "tab")
 	_, cmd := m.Update(key("enter"))
 	if p.mode != pmLogin {
 		t.Fatalf("mode=%v", p.mode)
@@ -430,7 +430,7 @@ func TestSubscriptionEditSignOutRenameDelete(t *testing.T) {
 func TestSubscriptionEnablePlanAndPreserveCatalogRefresh(t *testing.T) {
 	m, _, fake, opened := subscriptionModel(t)
 	fake.noPlan.Store(true)
-	typeKeys(m, "a", "right", "right", "tab", "tab", "tab", "tab")
+	typeKeys(m, "a", "right", "tab", "tab", "tab", "tab")
 	_, cmd := m.Update(key("enter"))
 	if next := finishLogin(t, m, cmd, "good"); next != nil || fake.catalogs.Load() != 0 {
 		t.Fatal("identity-only login started inference/catalog")

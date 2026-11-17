@@ -91,7 +91,7 @@ func Check(cwd string) Report {
 var (
 	knownTop        = []string{"version", "connections", "profiles", "default", "permissions", "ui", "sandbox"}
 	knownConnection = []string{"name", "kind", "subscription", "api", "baseUrl", "apiKey", "headers", "compat", "models", "disabled"}
-	knownKinds      = []string{string(KindLLMServer), string(KindAPIKey), string(KindSubscription), string(KindRuntime)}
+	knownKinds      = []string{string(KindLLMServer), string(KindSubscription)}
 	knownModel      = []string{"id", "name", "reasoning", "reasoningLevels", "reasoningDefault", "reasoningChecked", "contextWindow", "maxTokens", "cost", "compat", "disabled"}
 	knownCompat     = []string{"thinking", "extraBody"}
 	knownCost       = []string{"input", "output", "cacheRead", "cacheWrite"}

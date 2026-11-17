@@ -82,32 +82,32 @@ func TestConnectionsAddFlowFormPickerSaveConnect(t *testing.T) {
 		t.Fatalf("mode after a = %v focus=%v", p.mode, p.form.focused())
 	}
 	f := p.form
-	// Kind → API key swaps the service list and prefills OpenAI.
-	typeKeys(m, "right")
-	if f.get("service").options[0].label != "OpenAI" || f.value("url") != "https://api.openai.com/v1" || f.value("name") != "openai" {
-		t.Fatalf("api-key kind prefill: service=%v url=%q name=%q", f.get("service").options[0], f.value("url"), f.value("name"))
+	if kinds := f.get("kind").options; len(kinds) != 2 || kinds[0].label != "LLM server" || kinds[1].label != "Subscription" {
+		t.Fatalf("kind choices = %v", kinds)
 	}
-	if !strings.Contains(panelText(m), "Runtime · soon") {
-		t.Fatal("upcoming kinds not shown")
+	if services := f.get("service").options; len(services) != 1 || services[0].label != "Other" || f.value("url") != "" || f.value("name") != "" {
+		t.Fatalf("server form: services=%v url=%q name=%q", services, f.value("url"), f.value("name"))
 	}
 	// Subscription swaps the URL/key fields for a sign-in button.
 	typeKeys(m, "right")
-	if f.get("kind").sel != 2 || !f.get("url").hidden || !f.get("key").hidden || f.get("login").hidden || !f.get("fetch").hidden {
+	if f.get("kind").sel != 1 || !f.get("url").hidden || !f.get("key").hidden || f.get("login").hidden || !f.get("fetch").hidden {
 		t.Fatalf("subscription fields: url hidden=%v key hidden=%v login hidden=%v fetch hidden=%v", f.get("url").hidden, f.get("key").hidden, f.get("login").hidden, f.get("fetch").hidden)
 	}
 	if !strings.Contains(panelText(m), "Continue with ChatGPT") || strings.Contains(panelText(m), "Base URL") {
 		t.Fatalf("subscription form:\n%s", panelText(m))
 	}
-	// Disabled kinds are skipped: right from Subscription wraps to LLM server.
+	// Right from Subscription wraps to Other and clears subscription defaults.
 	typeKeys(m, "right")
-	if f.get("kind").sel != 0 || f.value("url") != "http://localhost:11434/v1" || f.value("name") != "ollama" || f.get("url").hidden || !f.get("login").hidden {
+	if f.get("kind").sel != 0 || f.value("url") != "" || f.value("name") != "" || f.get("url").hidden || !f.get("login").hidden {
 		t.Fatalf("wrap to llm-server: sel=%d url=%q name=%q", f.get("kind").sel, f.value("url"), f.value("name"))
 	}
-	// Service → Other clears the preset URL and auto name.
-	typeKeys(m, "tab", "right", "right", "right", "right")
-	if f.value("url") != "" || f.value("name") != "" || p.preset.ID != "other-server" {
-		t.Fatalf("Other preset: url=%q name=%q preset=%s", f.value("url"), f.value("name"), p.preset.ID)
+	// Other is the only server service; cycling it must preserve a typed URL.
+	f.get("url").input.SetValue("https://api.openai.com/v1")
+	typeKeys(m, "tab", "right", "left")
+	if p.preset.ID != "other-server" || f.value("url") != "https://api.openai.com/v1" {
+		t.Fatalf("Other preset: url=%q preset=%s", f.value("url"), p.preset.ID)
 	}
+	f.get("url").input.SetValue("")
 	// Name, then URL by paste (bracketed paste arrives as a message).
 	typeKeys(m, "tab")
 	typeText(m, "bad name!")
@@ -221,24 +221,30 @@ func TestConnectionsAddFlowFormPickerSaveConnect(t *testing.T) {
 	}
 }
 
-func TestConnectionsAddAPIKeyManualModels(t *testing.T) {
+func TestConnectionsAddServerManualModels(t *testing.T) {
 	m, _ := panelModel(t)
 	p := m.panel
-	typeKeys(m, "a", "right") // API key kind, OpenAI preset
+	typeKeys(m, "a")
 	f := p.form
-	// Vendors need a key: Fetch without one is refused on the key field.
+	// Servers require a URL, not an API key or a vendor preset.
 	_ = f.focusID("fetch")
 	typeKeys(m, "enter")
-	if p.mode != pmAdd || f.get("key").err == "" || f.focused().id != "key" {
-		t.Fatalf("missing key accepted: mode=%v err=%q", p.mode, f.get("key").err)
+	if p.mode != pmAdd || f.get("url").err == "" || f.focused().id != "url" {
+		t.Fatalf("missing URL accepted: mode=%v err=%q", p.mode, f.get("url").err)
 	}
-	typeText(m, "$OPENAI_API_KEY")
+	typeText(m, "https://api.example.com/v1")
+	f.get("name").input.SetValue("remote")
 	_ = f.focusID("fetch")
 	typeKeys(m, "enter")
+	if p.mode != pmBusy || p.draft.APIKey != "" {
+		t.Fatalf("keyless fetch: mode=%v key=%q", p.mode, p.draft.APIKey)
+	}
 	m.Update(modelsFetchedMsg{err: errors.New("401 Unauthorized: check the API key")})
 	if p.mode != pmAdd || f.get("models").hidden || f.get("save").hidden {
 		t.Fatalf("manual fallback not offered: mode=%v", p.mode)
 	}
+	_ = f.focusID("key")
+	typeText(m, "$MY_API_KEY")
 	// Empty list is refused; then two ids save without a fetch.
 	_ = f.focusID("save")
 	typeKeys(m, "enter")
@@ -249,11 +255,11 @@ func TestConnectionsAddAPIKeyManualModels(t *testing.T) {
 	_ = f.focusID("save")
 	typeKeys(m, "enter")
 	cfg := mustLoad(t, m)
-	conn := cfg.Connections["openai"]
-	if conn.Kind != config.KindAPIKey || conn.APIKey != "$OPENAI_API_KEY" || conn.Compat.Thinking != config.ThinkingReasoningEffort {
+	conn := cfg.Connections["remote"]
+	if conn.Kind != config.KindLLMServer || conn.APIKey != "$MY_API_KEY" || conn.Compat.Thinking != "" {
 		t.Fatalf("saved = %+v", conn)
 	}
-	if len(conn.Models) != 2 || conn.Models[0].ID != "gpt-5.6-sol" || conn.Models[1].ID != "o3" || !conn.Models[0].Reasoning {
+	if len(conn.Models) != 2 || conn.Models[0].ID != "gpt-5.6-sol" || conn.Models[1].ID != "o3" || !conn.Models[0].Reasoning || conn.Models[0].Compat.Thinking != config.ThinkingReasoningEffort {
 		t.Fatalf("models = %+v", conn.Models)
 	}
 	if p.mode != pmBusy { // connects because nothing else is configured
@@ -261,8 +267,8 @@ func TestConnectionsAddAPIKeyManualModels(t *testing.T) {
 	}
 	typeKeys(m, "esc")
 	text := panelText(m)
-	if !strings.Contains(text, "API key") || !strings.Contains(text, "$OPENAI_API_KEY") || strings.Contains(text, "api.openai.com") {
-		t.Fatalf("api-key row should show the env name, not the host:\n%s", text)
+	if !strings.Contains(text, "LLM server") || !strings.Contains(text, "$MY_API_KEY") || !strings.Contains(text, "api.example.com") {
+		t.Fatalf("server row should show its host and key reference:\n%s", text)
 	}
 }
 
@@ -370,6 +376,7 @@ func TestConnectionsEditFormSaveRenameAndRefetch(t *testing.T) {
 	m, _ := panelModel(t)
 	conn := config.Connection{Kind: config.KindLLMServer, API: config.APIOpenAICompat, BaseURL: "http://h/v1", APIKey: "k",
 		Headers: map[string]string{"X-Team": "a"},
+		Compat:  config.Compat{Thinking: config.ThinkingOpenRouter},
 		Models:  []config.Model{{ID: "a", Reasoning: true}, {ID: "b"}}}
 	if err := config.SaveConnection(m.o.ConfigPath, "srv", conn, "srv/a"); err != nil {
 		t.Fatal(err)
@@ -415,8 +422,8 @@ func TestConnectionsEditFormSaveRenameAndRefetch(t *testing.T) {
 	if p.mode != pmBusy || p.pickFrom != pmEdit {
 		t.Fatalf("refetch: mode=%v from=%v", p.mode, p.pickFrom)
 	}
-	m.Update(modelsFetchedMsg{ids: []string{"a", "c"}})
-	if p.mode != pmPick || !p.picked["a"] || p.picked["c"] {
+	m.Update(modelsFetchedMsg{ids: []string{"a", "deepseek-r1"}})
+	if p.mode != pmPick || !p.picked["a"] || p.picked["deepseek-r1"] {
 		t.Fatalf("picker preticks = %v", p.picked)
 	}
 	// esc from the picker returns to the form intact.
@@ -426,12 +433,15 @@ func TestConnectionsEditFormSaveRenameAndRefetch(t *testing.T) {
 	}
 	_ = f.focusID("refetch")
 	typeKeys(m, "enter")
-	m.Update(modelsFetchedMsg{ids: []string{"a", "c"}})
-	typeKeys(m, "down", "space", "down", "enter") // tick c, Confirm
+	m.Update(modelsFetchedMsg{ids: []string{"a", "deepseek-r1"}})
+	typeKeys(m, "down", "space", "down", "enter") // tick deepseek-r1, Confirm
 	cfg = mustLoad(t, m)
 	got = cfg.Connections["srv2"]
-	if len(got.Models) != 2 || got.Models[0].ID != "a" || !got.Models[0].Reasoning || got.Models[1].ID != "c" {
+	if len(got.Models) != 2 || got.Models[0].ID != "a" || !got.Models[0].Reasoning || got.Models[1].ID != "deepseek-r1" {
 		t.Fatalf("models after refetch = %+v", got.Models)
+	}
+	if got.Compat.Thinking != config.ThinkingOpenRouter || got.Models[1].Compat.Thinking != "" {
+		t.Fatalf("refetch replaced the saved server protocol with a guessed one: %+v", got)
 	}
 	if p.mode != pmList {
 		t.Fatalf("mode after confirm = %v (editing must not auto-connect)", p.mode)

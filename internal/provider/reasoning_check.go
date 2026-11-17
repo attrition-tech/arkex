@@ -30,7 +30,7 @@ type CheckedReasoning struct {
 // is tried first, then other formats Arkex can send. Effort controls take
 // precedence over a toggle-only result. No HTTP failure triggers a retry.
 func CheckReasoning(ctx context.Context, ref config.ModelRef, client *http.Client) (CheckedReasoning, error) {
-	if ref.Conn.Kind == config.KindSubscription || ref.Conn.Kind == config.KindRuntime ||
+	if ref.Conn.Kind == config.KindSubscription ||
 		(ref.Conn.API != "" && ref.Conn.API != config.APIOpenAICompat) {
 		return CheckedReasoning{}, errors.New("reasoning checks require an OpenAI-compatible Chat Completions connection")
 	}

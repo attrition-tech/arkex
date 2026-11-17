@@ -21,43 +21,24 @@ import (
 	"github.com/attrition-tech/arkex/internal/config"
 )
 
-// Preset pre-fills the add form for a known service. Each connection kind
-// has its own list; the "other" entry of each kind is the catch-all for
-// anything speaking the OpenAI wire protocol.
+// Preset describes a setup choice: a generic server or a subscription.
 type Preset struct {
-	ID       string
-	Label    string
-	Hint     string
-	Kind     config.Kind
-	BaseURL  string // empty: ask
-	NeedsKey bool   // false: key is optional
-	Compat   config.Compat
+	ID      string
+	Label   string
+	Hint    string
+	Kind    config.Kind
+	BaseURL string // empty: ask
+	Compat  config.Compat
 }
 
-// Presets in display order, grouped by kind. Local servers come first:
-// arkex exists for people running their own models.
+// Presets in display order. Server URLs and keys are supplied by the user;
+// there are no vendor-specific server presets.
 var Presets = []Preset{
-	{ID: "ollama", Label: "Ollama", Hint: "localhost:11434, no key", Kind: config.KindLLMServer, BaseURL: "http://localhost:11434/v1"},
-	{ID: "llamacpp", Label: "llama.cpp", Hint: "llama-server on localhost:8080", Kind: config.KindLLMServer, BaseURL: "http://localhost:8080/v1"},
-	{ID: "lmstudio", Label: "LM Studio", Hint: "localhost:1234", Kind: config.KindLLMServer, BaseURL: "http://localhost:1234/v1"},
-	{ID: "vllm", Label: "vLLM", Hint: "localhost:8000", Kind: config.KindLLMServer, BaseURL: "http://localhost:8000/v1"},
-	{ID: "other-server", Label: "Other", Hint: "LiteLLM, SGLang, your own gateway — anything serving /v1", Kind: config.KindLLMServer},
-
-	{ID: "openai", Label: "OpenAI", Hint: "api.openai.com", Kind: config.KindAPIKey, BaseURL: "https://api.openai.com/v1", NeedsKey: true, Compat: config.Compat{Thinking: config.ThinkingReasoningEffort}},
-	{ID: "anthropic", Label: "Anthropic", Hint: "OpenAI-compatible endpoint; model list may need typing", Kind: config.KindAPIKey, BaseURL: "https://api.anthropic.com/v1", NeedsKey: true},
-	{ID: "google", Label: "Google", Hint: "Gemini via the OpenAI-compatible endpoint", Kind: config.KindAPIKey, BaseURL: "https://generativelanguage.googleapis.com/v1beta/openai", NeedsKey: true},
-	{ID: "deepseek", Label: "DeepSeek", Hint: "api.deepseek.com", Kind: config.KindAPIKey, BaseURL: "https://api.deepseek.com/v1", NeedsKey: true, Compat: config.Compat{Thinking: config.ThinkingDeepSeek}},
-	{ID: "openrouter", Label: "OpenRouter", Hint: "many hosted models behind one key", Kind: config.KindAPIKey, BaseURL: "https://openrouter.ai/api/v1", NeedsKey: true, Compat: config.Compat{Thinking: config.ThinkingOpenRouter}},
-	{ID: "groq", Label: "Groq", Hint: "api.groq.com", Kind: config.KindAPIKey, BaseURL: "https://api.groq.com/openai/v1", NeedsKey: true},
-	{ID: "mistral", Label: "Mistral", Hint: "api.mistral.ai", Kind: config.KindAPIKey, BaseURL: "https://api.mistral.ai/v1", NeedsKey: true},
-	{ID: "moonshot", Label: "Moonshot", Hint: "Kimi, api.moonshot.ai", Kind: config.KindAPIKey, BaseURL: "https://api.moonshot.ai/v1", NeedsKey: true},
-	{ID: "other-api", Label: "Other", Hint: "any hosted OpenAI-compatible API", Kind: config.KindAPIKey, NeedsKey: true},
-
+	{ID: "other-server", Label: "Other", Hint: "OpenAI-compatible base URL, usually ending in /v1", Kind: config.KindLLMServer},
 	{ID: "chatgpt", Label: "ChatGPT", Hint: "authorize eligible ChatGPT plan usage; no API key needed", Kind: config.KindSubscription, BaseURL: chatgpt.BaseURL, Compat: config.Compat{Thinking: config.ThinkingReasoningEffort}},
 }
 
-// PresetsFor returns the presets of one kind, in display order. The last
-// entry is always that kind's "Other" catch-all.
+// PresetsFor returns the setup choices for one kind, in display order.
 func PresetsFor(kind config.Kind) []Preset {
 	var out []Preset
 	for _, p := range Presets {
@@ -86,44 +67,6 @@ func Other(kind config.Kind) Preset {
 		return Preset{ID: "other-server", Label: "Other", Kind: config.KindLLMServer}
 	}
 	return ps[len(ps)-1]
-}
-
-// DetectPreset picks the preset whose host matches baseURL, falling back to
-// the "Other" entry for the kind the URL implies (loopback → llm-server).
-// Existing connections get their compat from it.
-func DetectPreset(baseURL string) Preset {
-	u, err := url.Parse(baseURL)
-	if err != nil || u.Hostname() == "" {
-		return Other(config.KindLLMServer)
-	}
-	host := strings.ToLower(u.Hostname())
-	for _, p := range Presets {
-		if p.BaseURL == "" {
-			continue
-		}
-		pu, err := url.Parse(p.BaseURL)
-		if err == nil && pu.Hostname() == host && (pu.Port() == "" || pu.Port() == u.Port()) {
-			return p
-		}
-	}
-	if IsLocal(baseURL) {
-		return Other(config.KindLLMServer)
-	}
-	return Other(config.KindAPIKey)
-}
-
-// IsLocal reports whether baseURL points at the local machine.
-func IsLocal(baseURL string) bool {
-	u, err := url.Parse(baseURL)
-	if err != nil {
-		return false
-	}
-	host := strings.ToLower(u.Hostname())
-	if host == "localhost" || host == "::1" || strings.HasSuffix(host, ".localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 // NormalizeBaseURL trims whitespace and a trailing slash and requires an

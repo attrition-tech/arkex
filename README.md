@@ -61,8 +61,19 @@ curl -fsSL https://get.arkex.dev/install.sh | sh -s -- --fresh --yes
 
 ## Configure
 
-Run `arkex` in your project, open `/connections`, and add your model server,
-API connection, or ChatGPT account. Choose a model and start chatting.
+Run `arkex` in your project and open `/connections`. There are two kinds:
+
+- **LLM server → Other:** enter an OpenAI-compatible base URL and an API key if
+  your server requires one, then fetch or enter model IDs. This covers local,
+  private and hosted endpoints without vendor-specific presets.
+- **Subscription → ChatGPT:** sign in through the browser and choose a model
+  available to your account.
+
+Config v5 converts existing `api-key` and `runtime` kinds to `llm-server` without
+changing their URLs, credentials, models, reasoning settings, or selectors.
+Loading does not rewrite the file; the next config edit or `arkex config migrate`
+saves the upgrade and keeps a backup. Existing LLM servers and subscriptions stay
+as configured.
 
 Configuration and sessions stay in `~/.arkex/`. API keys can reference environment
 variables instead of being stored directly, for example `"apiKey": "$MY_API_KEY"`.
@@ -109,7 +120,7 @@ Signing in and granting ChatGPT plan usage are separate. If the browser grants
 only identity access, Arkex keeps the registration but blocks inference and
 offers **Enable ChatGPT plan usage**. Availability and limits depend on OpenAI's
 preview and your account; manage usage at `https://chatgpt.com/settings/usage`.
-An API-key connection remains a separate option.
+For an API key instead, use **LLM server → Other** with a Chat Completions endpoint.
 
 Credentials, account-bound client IDs, and the installation's stable host ID
 live in `~/.arkex/auth.json` with owner-only permissions. Refresh tokens rotate

@@ -25,7 +25,7 @@ type command struct {
 }
 
 var commands = []command{
-	{name: "/connections", desc: "list, add, disable or remove LLM servers, API keys and models"},
+	{name: "/connections", desc: "list, add, disable or remove LLM servers, subscriptions and models"},
 	{name: "/models", desc: "same as /connections"},
 	{name: "/model", args: "<provider/model>", desc: "switch model (the conversation continues)"},
 	{name: "/clear", desc: "start a fresh conversation (also /new)"},

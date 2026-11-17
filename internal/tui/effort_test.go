@@ -26,7 +26,7 @@ func effortModel(t *testing.T) *model {
 	m, _ := testModel(t)
 	m.o.Connect = nil // a standalone agent; connection transitions have separate tests
 	t.Setenv("ARKEX_HOME", t.TempDir())
-	ref := config.ModelRef{ConnID: "custom", Conn: config.Connection{Kind: config.KindAPIKey, API: config.APIOpenAICompat, BaseURL: "https://custom.example/v1", Compat: config.Compat{Thinking: config.ThinkingReasoningEffort}}, Model: config.Model{ID: "custom-model", Reasoning: true, ReasoningLevels: []string{"low", "medium", "high", "xhigh"}}}
+	ref := config.ModelRef{ConnID: "custom", Conn: config.Connection{Kind: config.KindLLMServer, API: config.APIOpenAICompat, BaseURL: "https://custom.example/v1", Compat: config.Compat{Thinking: config.ThinkingReasoningEffort}}, Model: config.Model{ID: "custom-model", Reasoning: true, ReasoningLevels: []string{"low", "medium", "high", "xhigh"}}}
 	lm, err := provider.Open(t.Context(), ref, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +142,7 @@ func TestEffortMenuAndVisibilityAreSeparate(t *testing.T) {
 
 func TestDiscoveredReasoningIsSaved(t *testing.T) {
 	m, _, _, _ := subscriptionModel(t)
-	typeKeys(m, "a", "right", "right")
+	typeKeys(m, "a", "right")
 	if !m.buildDraft() {
 		t.Fatal("draft")
 	}

@@ -11,7 +11,7 @@ import (
 
 // CurrentVersion is the config format this build writes. Files without a
 // "version" key are version 0, the format used before versioning existed.
-const CurrentVersion = 4
+const CurrentVersion = 5
 
 // ErrNewerConfig is returned when a file was written by a newer arkex.
 var ErrNewerConfig = errors.New("config written by a newer arkex")
@@ -43,7 +43,7 @@ var migrations = []func(root map[string]any) error{
 			key, _ := p["apiKey"].(string)
 			url, _ := p["baseUrl"].(string)
 			if key != "" && !isLoopback(url) {
-				p["kind"] = string(KindAPIKey)
+				p["kind"] = "api-key"
 			} else {
 				p["kind"] = string(KindLLMServer)
 			}
@@ -77,6 +77,18 @@ var migrations = []func(root map[string]any) error{
 		}
 		return nil
 	},
+	// 4 → 5: only generic servers and subscriptions remain. Preserve all
+	// connection settings; the removed kinds used the same server transport.
+	func(root map[string]any) error {
+		connections, _ := root["connections"].(map[string]any)
+		for _, value := range connections {
+			connection, _ := value.(map[string]any)
+			if kind := connection["kind"]; kind == "api-key" || kind == "runtime" {
+				connection["kind"] = string(KindLLMServer)
+			}
+		}
+		return nil
+	},
 }
 
 // versionOf reads the version key (0 when absent).
@@ -103,11 +115,13 @@ func Migrate(root map[string]any) (bool, error) {
 	if from > CurrentVersion {
 		return false, fmt.Errorf("%w (file is version %d, this arkex understands %d; run: arkex update)", ErrNewerConfig, from, CurrentVersion)
 	}
-	if from == CurrentVersion {
+	if from >= 4 {
 		perms, _ := root["permissions"].(map[string]any)
 		if _, exists := perms["install_dependency"]; exists {
 			return false, errors.New("permissions.install_dependency was renamed to permissions.packages in config version 4; rename the key and preserve any deny")
 		}
+	}
+	if from == CurrentVersion {
 		return false, validatePermissions(root)
 	}
 	for v := from; v < CurrentVersion; v++ {

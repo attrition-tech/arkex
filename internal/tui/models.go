@@ -436,17 +436,14 @@ func (m *model) afterEdit(err error, done, keep string) {
 
 var kindOptions = []choiceOpt{
 	{label: config.KindLLMServer.Label()},
-	{label: config.KindAPIKey.Label()},
 	{label: config.KindSubscription.Label()},
-	{label: config.KindRuntime.Label(), disabled: true},
 }
 
-var formKinds = []config.Kind{config.KindLLMServer, config.KindAPIKey, config.KindSubscription}
+var formKinds = []config.Kind{config.KindLLMServer, config.KindSubscription}
 
 // kindHelp is the line under the Kind pills for the selected kind.
 var kindHelp = map[config.Kind]string{
-	config.KindLLMServer:    "a server that speaks the OpenAI API — Ollama, llama.cpp, LM Studio, vLLM…",
-	config.KindAPIKey:       "a hosted vendor you pay per token — OpenAI, Anthropic, OpenRouter, DeepSeek…",
+	config.KindLLMServer:    "your OpenAI-compatible endpoint — enter its URL and an API key if required",
 	config.KindSubscription: "your ChatGPT plan, signed in through the browser; no key to paste",
 }
 
@@ -464,7 +461,7 @@ func (m *model) openAdd() tea.Cmd {
 	f.add(noteField(subscriptionNote)).id = "subnote"
 	f.add(textField("name", "Name", "", "short id, used as name/model")).gap = true
 	f.add(textField("url", "Base URL", "", "https://your-server.example/v1")).gap = true
-	key := f.add(secretField("key", "API key", "", ""))
+	key := f.add(secretField("key", "API key", "", "if required by your server"))
 	key.gap, key.help = true, "$MY_VAR reads it from the environment"
 	f.add(buttonField("reveal", "show")).inline = true
 	enabled := f.add(checkField("enabled", "Enabled", true))
@@ -495,8 +492,8 @@ func (p *modelsPanel) formKind() config.Kind {
 }
 
 // setKind fills the Service options for the kind at index i, applies its
-// first preset and shows the fields that kind needs: servers and vendors
-// take a URL and key and fetch /models; a subscription signs in instead.
+// first preset and shows the fields that kind needs: servers take a URL
+// and optional key and fetch /models; a subscription signs in instead.
 func (p *modelsPanel) setKind(i int) {
 	kind := formKinds[min(i, len(formKinds)-1)]
 	var opts []choiceOpt
@@ -520,12 +517,13 @@ func (p *modelsPanel) setKind(i int) {
 	}
 }
 
-// applyPreset prefills URL, name and key hint from the selected service.
+// applyPreset prefills URL and name from the selected service.
 func (p *modelsPanel) applyPreset() {
 	f := p.form
 	p.draftAuthID, p.catalog = "", nil
 	kind := formKinds[min(f.get("kind").sel, len(formKinds)-1)]
 	presets := setup.PresetsFor(kind)
+	previousURL := p.preset.BaseURL
 	p.preset = presets[min(f.get("service").sel, len(presets)-1)]
 	if kind == config.KindSubscription {
 		f.get("login").label = "Continue with " + p.preset.Label + " →"
@@ -533,7 +531,7 @@ func (p *modelsPanel) applyPreset() {
 	}
 
 	urlF := f.get("url")
-	if p.preset.BaseURL != "" || setup.DetectPreset(urlF.input.Value()).BaseURL != "" {
+	if p.preset.BaseURL != "" || urlF.input.Value() == previousURL {
 		urlF.input.SetValue(p.preset.BaseURL)
 		urlF.input.CursorEnd()
 	}
@@ -552,15 +550,6 @@ func (p *modelsPanel) applyPreset() {
 		nameF.input.CursorEnd()
 		p.autoName = name
 	}
-
-	keyF := f.get("key")
-	if p.preset.NeedsKey {
-		keyF.input.Placeholder = "required"
-		keyF.help = "stored in config.json (mode 0600) · type $MY_VAR to read it from the environment instead"
-	} else {
-		keyF.input.Placeholder = "optional for local servers"
-		keyF.help = "$MY_VAR reads it from the environment"
-	}
 }
 
 func (m *model) openEdit(id string) tea.Cmd {
@@ -576,7 +565,8 @@ func (m *model) openEdit(id string) tea.Cmd {
 	}
 	p.mode, p.err, p.note = pmEdit, "", ""
 	p.editID, p.editConn = id, c
-	p.preset = setup.DetectPreset(c.BaseURL)
+	p.preset = setup.Other(config.KindLLMServer)
+	p.preset.Compat = c.Compat
 	if c.Kind == config.KindSubscription {
 		service := c.Subscription
 		if service == "" {
@@ -796,12 +786,6 @@ func (m *model) buildDraft() bool {
 		bad = f.get("name")
 	}
 	key := f.value("key")
-	if p.preset.NeedsKey && key == "" && p.mode == pmAdd {
-		f.get("key").err = "this service needs an API key"
-		if bad == nil {
-			bad = f.get("key")
-		}
-	}
 	if bad != nil {
 		f.focusID(bad.id)
 		return false
@@ -1676,8 +1660,8 @@ func (p *modelsPanel) listLines(m *model, inner, height int) []string {
 			"",
 			"  No connections yet.",
 			"",
-			"  Press " + keyStyle.Render("a") + " (or click " + formButton.Render("  + Add  ") + ") to connect a server, an API key or a ChatGPT plan.",
-			"  " + dimStyle.Render("Ollama, llama.cpp, LM Studio, vLLM, OpenAI, Anthropic, OpenRouter, DeepSeek… anything serving /v1."),
+			"  Press " + keyStyle.Render("a") + " (or click " + formButton.Render("  + Add  ") + ") to connect an LLM server or a subscription.",
+			"  " + dimStyle.Render("LLM server → Other for an OpenAI-compatible endpoint. Subscription → ChatGPT to sign in."),
 			"",
 			"  " + dimStyle.Render("Or edit "+m.o.ConfigPath+" by hand and press r."),
 		}
@@ -1808,9 +1792,8 @@ func (p *modelsPanel) status(id string, c config.Connection) string {
 	return okStyle.Render(padRight("● enabled", panelStatusW))
 }
 
-// authSummary is the short "where/how" text of a connection row: the host
-// for servers, a masked key or its $ENV name for vendors, the account for
-// subscriptions.
+// authSummary shows the server host and masked key or $ENV name, or the
+// signed-in account for subscriptions.
 func (p *modelsPanel) authSummary(id string, c config.Connection) string {
 	if c.Kind == config.KindSubscription {
 		if t, ok := p.auth[id]; ok {
@@ -1831,9 +1814,6 @@ func (p *modelsPanel) authSummary(id string, c config.Connection) string {
 		key = c.APIKey[:3] + "…" + c.APIKey[len(c.APIKey)-4:]
 	default:
 		key = "key set"
-	}
-	if c.Kind == config.KindAPIKey && key != "" {
-		return key
 	}
 	if key != "" {
 		return host + " · " + key

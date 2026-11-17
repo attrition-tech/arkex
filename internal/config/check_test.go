@@ -1,9 +1,11 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -118,7 +120,7 @@ func TestMigrateV2PermissionsConvertsAskAndPreservesDeny(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(p)
-	if strings.Contains(string(b), `"ask"`) || !strings.Contains(string(b), `"write": "deny"`) || !strings.Contains(string(b), `"version": 4`) {
+	if strings.Contains(string(b), `"ask"`) || !strings.Contains(string(b), `"write": "deny"`) || !strings.Contains(string(b), `"version": 5`) {
 		t.Fatalf("file after migration:\n%s", b)
 	}
 }
@@ -151,7 +153,7 @@ func TestMigratePackagePermissions(t *testing.T) {
 				t.Fatalf("migration changed=%v: %v", changed, err)
 			}
 			data, err := os.ReadFile(p)
-			if err != nil || strings.Contains(string(data), "install_dependency") || !strings.Contains(string(data), `"version": 4`) {
+			if err != nil || strings.Contains(string(data), "install_dependency") || !strings.Contains(string(data), `"version": 5`) {
 				t.Fatalf("persisted migration: %s: %v", data, err)
 			}
 			if changed, err := MigrateFile(p); err != nil || changed {
@@ -221,7 +223,7 @@ func TestEditStampsVersionAndKeepsBackup(t *testing.T) {
 	}
 	b, _ := os.ReadFile(p)
 	s := string(b)
-	if !strings.Contains(s, `"version": 4`) || !strings.Contains(s, `"custom": 1`) || !strings.Contains(s, `"default": "l/m"`) || strings.Contains(s, "providers") {
+	if !strings.Contains(s, `"version": 5`) || !strings.Contains(s, `"custom": 1`) || !strings.Contains(s, `"default": "l/m"`) || strings.Contains(s, "providers") {
 		t.Fatalf("file after edit:\n%s", s)
 	}
 	bak, err := os.ReadFile(BackupPath(p))
@@ -339,7 +341,7 @@ func TestCheckMergedDefault(t *testing.T) {
 }
 
 func TestCheckCleanFile(t *testing.T) {
-	writeGlobal(t, `{"version": 4, "connections": {"l": {"kind": "llm-server", "api": "openai-compat", "baseUrl": "http://localhost:11434/v1", "apiKey": "x", "models": [{"id": "m"}]}}, "default": "l/m", "sandbox": {"maxBytes": 17179869184, "maxEntries": 500000}}`)
+	writeGlobal(t, `{"version": 5, "connections": {"l": {"kind": "llm-server", "api": "openai-compat", "baseUrl": "http://localhost:11434/v1", "apiKey": "x", "models": [{"id": "m"}]}}, "default": "l/m", "sandbox": {"maxBytes": 17179869184, "maxEntries": 500000}}`)
 	r := Check("")
 	if len(r.Problems) != 0 {
 		t.Fatalf("clean config reported:\n%s", problemText(r))
@@ -419,8 +421,8 @@ func TestRejectInvalidSandboxBudgets(t *testing.T) {
 	}
 }
 
-// A version-1 file (providers, no kind) loads as version 4: the map is
-// renamed and each entry gets a kind from how it is reached. The checker
+// A version-1 file (providers, no kind) loads as version 5: the map is
+// renamed and each entry becomes a generic LLM server. The checker
 // reports the pending upgrade and nothing else.
 func TestMigrateProvidersToConnections(t *testing.T) {
 	p := writeGlobal(t, `{"version": 1, "providers": {
@@ -433,7 +435,7 @@ func TestMigrateProvidersToConnections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]Kind{"ollama": KindLLMServer, "router": KindAPIKey, "lan": KindAPIKey}
+	want := map[string]Kind{"ollama": KindLLMServer, "router": KindLLMServer, "lan": KindLLMServer}
 	for id, k := range want {
 		if got := cfg.Connections[id].Kind; got != k {
 			t.Errorf("%s: kind = %q, want %q", id, got, k)
@@ -448,8 +450,59 @@ func TestMigrateProvidersToConnections(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := os.ReadFile(p)
-	if strings.Contains(string(b), `"providers"`) || !strings.Contains(string(b), `"kind": "api-key"`) || !strings.Contains(string(b), `"version": 4`) {
+	if strings.Contains(string(b), `"providers"`) || strings.Contains(string(b), `"kind": "api-key"`) || !strings.Contains(string(b), `"version": 5`) {
 		t.Fatalf("file after edit:\n%s", b)
+	}
+}
+
+func TestMigrateConnectionKindsPreservesSettings(t *testing.T) {
+	const original = `{"version":4,"connections":{
+	  "vendor":{"kind":"api-key","api":"openai-compat","name":"My server","baseUrl":"https://api.example.com/v1","apiKey":"$KEY","headers":{"X-Team":"test"},"compat":{"thinking":"openrouter","extraBody":{"temperature":0.2}},"models":[{"id":"m","reasoning":true,"reasoningLevels":["low","high"],"reasoningChecked":true,"contextWindow":32000},{"id":"hidden","disabled":true}],"custom":"keep"},
+	  "runtime":{"kind":"runtime","api":"openai-compat","baseUrl":"http://localhost:8000/v1","models":[{"id":"m"}],"disabled":true},
+	  "server":{"kind":"llm-server","api":"openai-compat","baseUrl":"http://localhost:11434/v1","models":[{"id":"m"}]},
+	  "plan":{"kind":"subscription","subscription":"chatgpt","api":"openai","baseUrl":"https://api.openai.com/v1","models":[{"id":"gpt"}]}
+	},"default":"vendor/m","profiles":{"fast":{"model":"vendor/m","thinking":"low"}},"permissions":{"packages":"deny"}}`
+	path := writeGlobal(t, original)
+	t.Setenv("KEY", "test-key")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string]Kind{"vendor": KindLLMServer, "runtime": KindLLMServer, "server": KindLLMServer, "plan": KindSubscription} {
+		if got := cfg.Connections[id].Kind; got != want {
+			t.Fatalf("%s kind = %q, want %q", id, got, want)
+		}
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != original {
+		t.Fatalf("loading rewrote the config: %v", err)
+	}
+	if report := Check(""); report.Errors() != 0 {
+		t.Fatalf("migrated config rejected: %s", problemText(report))
+	}
+	if changed, err := MigrateFile(path); err != nil || !changed {
+		t.Fatalf("migration changed=%v: %v", changed, err)
+	}
+	var want, got map[string]any
+	if err := json.Unmarshal([]byte(original), &want); err != nil {
+		t.Fatal(err)
+	}
+	want["version"] = float64(5)
+	connections := want["connections"].(map[string]any)
+	for _, id := range []string{"vendor", "runtime"} {
+		connections[id].(map[string]any)["kind"] = "llm-server"
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, &got); err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("migration changed more than the version and kinds: %s: %v", data, err)
+	}
+	if backup, err := os.ReadFile(BackupPath(path)); err != nil || string(backup) != original {
+		t.Fatalf("original config backup missing: %v", err)
+	}
+	if changed, err := MigrateFile(path); err != nil || changed {
+		t.Fatalf("migration was not idempotent: changed=%v: %v", changed, err)
 	}
 }
 

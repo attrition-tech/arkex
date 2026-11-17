@@ -44,7 +44,7 @@ func effortItems(m *model) []paletteItem {
 			items[i].hint = "selected"
 		}
 	}
-	if ref.Conn.Kind != config.KindSubscription && ref.Conn.Kind != config.KindRuntime &&
+	if ref.Conn.Kind != config.KindSubscription &&
 		(ref.Conn.API == "" || ref.Conn.API == config.APIOpenAICompat) {
 		items = append(items, paletteItem{title: "Check reasoning…", detail: "Test this model's accepted request settings", action: func(m *model) tea.Cmd { return m.confirmReasoningCheck() }})
 	}

@@ -18,17 +18,13 @@ import (
 	"github.com/attrition-tech/arkex/internal/tools"
 )
 
-// Kind says what a connection is, which decides how it is set up and shown:
-// a server you run (URL first, key optional), a hosted vendor you pay per
-// token (key first, URL from a preset), a consumer subscription signed in
-// with OAuth, or an external agent runtime arkex fronts.
+// Kind decides how a connection is set up and shown: an OpenAI-compatible
+// server (URL and optional key), or a subscription signed in with OAuth.
 type Kind string
 
 const (
 	KindLLMServer    Kind = "llm-server"
-	KindAPIKey       Kind = "api-key"
 	KindSubscription Kind = "subscription"
-	KindRuntime      Kind = "runtime"
 )
 
 // Label is the human name of the kind.
@@ -36,12 +32,8 @@ func (k Kind) Label() string {
 	switch k {
 	case KindLLMServer:
 		return "LLM server"
-	case KindAPIKey:
-		return "API key"
 	case KindSubscription:
 		return "Subscription"
-	case KindRuntime:
-		return "Runtime"
 	}
 	return string(k)
 }

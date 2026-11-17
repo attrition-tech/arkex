@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"charm.land/fantasy"
@@ -61,7 +62,7 @@ func TestRetryableNetworkErrors(t *testing.T) {
 }
 
 func TestTLSRecordFailureRecovery(t *testing.T) {
-	for _, stage := range []string{"empty stream", "partial stream", "declined retry"} {
+	for _, stage := range []string{"empty stream", "partial stream", "cancel backoff"} {
 		t.Run(stage, func(t *testing.T) {
 			t.Parallel()
 			partial := stage != "empty stream"
@@ -111,25 +112,36 @@ func TestTLSRecordFailureRecovery(t *testing.T) {
 			dir := t.TempDir()
 			a := &Agent{Model: lm, Tools: tools.Default(dir), Policy: AllowAll{}}
 			prompts := 0
-			a.Retry = func(_ context.Context, err error, gotPartial bool) bool {
+			a.Retry = func(_ context.Context, _ error, _ bool) bool {
 				prompts++
-				var op *net.OpError
-				if !gotPartial || !errors.As(err, &op) || op.Op != "local error" || op.Err.Error() != "tls: bad record MAC" {
-					t.Errorf("wrong interruption: partial=%v err=%v", gotPartial, err)
-				}
-				return stage != "declined retry"
+				return false
 			}
-			err = a.Run(t.Context(), "hi", func(Event) {})
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			recovered := 0
+			err = a.Run(ctx, "hi", func(e Event) {
+				switch e := e.(type) {
+				case RetryWait:
+					if e.Partial != partial || e.Attempt != 1 || e.Limit != 3 || !strings.Contains(e.Reason, "tls: bad record MAC") {
+						t.Fatalf("wrong retry notice: %+v", e)
+					}
+					if stage == "cancel backoff" {
+						cancel()
+					}
+				case RequestRecovered:
+					recovered += e.Retries
+				}
+			})
 			if _, statErr := os.Stat(filepath.Join(dir, "pending")); !errors.Is(statErr, os.ErrNotExist) {
 				t.Fatalf("tool from corrupted response executed: %v", statErr)
 			}
-			if stage == "declined retry" {
-				if !errors.Is(err, context.Canceled) || requests.Load() != 1 || prompts != 1 || len(a.Messages()) != 1 {
-					t.Fatalf("declined retry: err=%v requests=%d prompts=%d messages=%v", err, requests.Load(), prompts, a.Messages())
+			if stage == "cancel backoff" {
+				if !errors.Is(err, context.Canceled) || requests.Load() != 1 || prompts != 0 || recovered != 0 || len(a.Messages()) != 1 {
+					t.Fatalf("cancelled backoff: err=%v requests=%d prompts=%d messages=%v", err, requests.Load(), prompts, a.Messages())
 				}
 				return
 			}
-			if err != nil || requests.Load() != 2 || (partial && prompts != 1) || (!partial && prompts != 0) {
+			if err != nil || requests.Load() != 2 || prompts != 0 || recovered != 1 {
 				t.Fatalf("recovery: err=%v requests=%d prompts=%d", err, requests.Load(), prompts)
 			}
 			if first, second := <-addresses, <-addresses; first == second {
@@ -168,19 +180,17 @@ func TestNetworkTimeoutRecovery(t *testing.T) {
 				sse(w, delta(`{"content":"RECOVERED"}`, ""), delta(`{}`, "stop"))
 			}))
 			defer srv.Close()
-			lm, err := provider.Open(t.Context(), config.ModelRef{Conn: config.Connection{API: config.APIOpenAICompat, BaseURL: srv.URL}, Model: config.Model{ID: "test"}}, &http.Client{Timeout: 150 * time.Millisecond})
+			lm, err := provider.Open(t.Context(), config.ModelRef{Conn: config.Connection{
+				API: config.APIOpenAICompat, BaseURL: srv.URL, HeaderTimeout: "150ms", IdleTimeout: "150ms",
+			}, Model: config.Model{ID: "test"}}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
 			a := &Agent{Model: lm, Policy: AllowAll{}}
 			prompts, waits := 0, 0
-			a.Retry = func(_ context.Context, err error, partial bool) bool {
+			a.Retry = func(_ context.Context, _ error, _ bool) bool {
 				prompts++
-				var ne net.Error
-				if !partial || !errors.As(err, &ne) || !ne.Timeout() {
-					t.Errorf("wrong interruption: partial=%v err=%v", partial, err)
-				}
-				return true
+				return false
 			}
 			ctx := t.Context()
 			if stage == "cancel run" {
@@ -202,7 +212,7 @@ func TestNetworkTimeoutRecovery(t *testing.T) {
 			if err != nil || requests.Load() != 2 {
 				t.Fatalf("err=%v requests=%d", err, requests.Load())
 			}
-			if (stage == "partial stream" && (prompts != 1 || waits != 0)) || (stage != "partial stream" && (prompts != 0 || waits != 1)) {
+			if prompts != 0 || waits != 1 {
 				t.Fatalf("stage=%s prompts=%d waits=%d", stage, prompts, waits)
 			}
 			if len(a.messages) != 2 || a.messages[1].Content[0].(fantasy.TextPart).Text != "RECOVERED" {
@@ -361,4 +371,61 @@ func TestRetryCancelWaitAndPermanentFailure(t *testing.T) {
 	if d := retryDelay(&fantasy.ProviderError{ResponseHeaders: map[string]string{"Retry-After": "12"}}, 0); d != 12*time.Second {
 		t.Fatal(d)
 	}
+}
+
+func TestRetryWaitBudgetAndServerDeadline(t *testing.T) {
+	for _, advice := range []string{"12", "30", "31", "86400", "999999999999999999999", "http-date"} {
+		t.Run(advice, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				header := advice
+				if advice == "http-date" {
+					header = time.Now().Add(time.Hour).UTC().Format(http.TimeFormat)
+				}
+				failure := &fantasy.ProviderError{StatusCode: 429, Message: "busy", ResponseHeaders: map[string]string{"Retry-After": header}}
+				a := &Agent{Model: &provider.Model{LM: responseModel{parts: []fantasy.StreamPart{{Type: fantasy.StreamPartTypeError, Error: failure}}}}, Policy: AllowAll{}}
+				waits := 0
+				started := time.Now()
+				err := a.Run(t.Context(), "test", func(e Event) {
+					if _, ok := e.(RetryWait); ok {
+						waits++
+					}
+					if _, ok := e.(RequestRecovered); ok {
+						t.Fatal("reported recovery without completion")
+					}
+				})
+				wantWaits, wantElapsed := 0, time.Duration(0)
+				switch advice {
+				case "12":
+					wantWaits, wantElapsed = 2, 24*time.Second
+				case "30":
+					wantWaits, wantElapsed = 1, 30*time.Second
+				}
+				if !errors.Is(err, failure) || !strings.Contains(err.Error(), "automatic wait budget") || waits != wantWaits || time.Since(started) != wantElapsed {
+					t.Fatalf("err=%v waits=%d elapsed=%s", err, waits, time.Since(started))
+				}
+			})
+		})
+	}
+	// Explicit retry may approve a longer wait, but may not bypass it.
+	synctest.Test(t, func(t *testing.T) {
+		failure := &fantasy.ProviderError{StatusCode: 429, Message: "busy", ResponseHeaders: map[string]string{"Retry-After": "90"}}
+		a := &Agent{Model: &provider.Model{LM: responseModel{parts: []fantasy.StreamPart{{Type: fantasy.StreamPartTypeError, Error: failure}}}}, Policy: AllowAll{}}
+		prompts := 0
+		started := time.Now()
+		a.Retry = func(_ context.Context, _ error, _ bool) bool {
+			prompts++
+			if prompts == 1 {
+				time.Sleep(5 * time.Second)
+				return true
+			}
+			if time.Since(started) != 90*time.Second {
+				t.Fatalf("retry ignored or restarted the server deadline: %s", time.Since(started))
+			}
+			return false
+		}
+		err := a.Run(t.Context(), "test", nil)
+		if !errors.Is(err, context.Canceled) || prompts != 2 {
+			t.Fatalf("err=%v prompts=%d", err, prompts)
+		}
+	})
 }

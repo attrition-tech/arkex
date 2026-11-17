@@ -90,7 +90,7 @@ func Check(cwd string) Report {
 
 var (
 	knownTop        = []string{"version", "connections", "profiles", "default", "permissions", "ui", "sandbox"}
-	knownConnection = []string{"name", "kind", "subscription", "api", "baseUrl", "apiKey", "headers", "compat", "models", "disabled"}
+	knownConnection = []string{"name", "kind", "subscription", "api", "baseUrl", "apiKey", "headers", "compat", "models", "disabled", "headerTimeout", "idleTimeout"}
 	knownKinds      = []string{string(KindLLMServer), string(KindSubscription)}
 	knownModel      = []string{"id", "name", "reasoning", "reasoningLevels", "reasoningDefault", "reasoningChecked", "contextWindow", "maxTokens", "cost", "compat", "disabled"}
 	knownCompat     = []string{"thinking", "extraBody"}
@@ -215,6 +215,9 @@ func (c *checker) checkConnection(id string, p Connection, raw map[string]any) {
 	}
 	if p.Subscription != "" && (p.Kind != KindSubscription || p.Subscription != "chatgpt") {
 		c.errorf(where+".subscription", "must be chatgpt on a subscription connection")
+	}
+	if _, _, err := p.Timeouts(); err != nil {
+		c.errorf(where, "%v", err)
 	}
 	switch {
 	case p.BaseURL == "":

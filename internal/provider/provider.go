@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"time"
 
 	"charm.land/fantasy"
 	"charm.land/fantasy/providers/openai"
@@ -40,8 +39,12 @@ func (m *Model) Call(prompt fantasy.Prompt, tools []fantasy.Tool) fantasy.Call {
 // Credentials are resolved here, once, and never stored on the returned
 // value beyond what the HTTP client needs.
 func Open(ctx context.Context, ref config.ModelRef, client *http.Client) (*Model, error) {
+	header, idle, err := ref.Conn.Timeouts()
+	if err != nil {
+		return nil, fmt.Errorf("connection %q: %w", ref.ConnID, err)
+	}
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Minute}
+		client = &http.Client{Transport: &inferenceTransport{base: http.DefaultTransport, header: header, idle: idle}}
 	}
 	if ref.Conn.Kind == config.KindSubscription {
 		switch ref.Conn.Subscription {

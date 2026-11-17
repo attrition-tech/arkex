@@ -255,8 +255,7 @@ type model struct {
 	requestTimings []agent.RequestTiming
 	responseTiming responseTiming
 	requestStart   int
-	retryUntil     time.Time
-	retryAttempt   int
+	retry          *agent.RetryWait
 	liveCut        int
 	rollFrom       int
 	rollAt         time.Time
@@ -442,14 +441,14 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 			}
 			m.closePalette()
 			m.closeModels()
-			m.pending.title = "Connection still unavailable · 3 retries exhausted"
+			m.pending.title = "Automatic recovery stopped"
 			if msg.partial {
 				m.pending.title = "Response interrupted · retry restarts this response"
 			}
 			if errors.Is(msg.err, agent.ErrIncompleteResponse) {
-				m.pending.title = "Incomplete response · 2 retries exhausted"
+				m.pending.title = "Incomplete response · automatic recovery stopped"
 			} else if errors.Is(msg.err, agent.ErrMalformedToolResponse) {
-				m.pending.title = "Malformed tool response · 2 retries exhausted"
+				m.pending.title = "Malformed tool response · automatic recovery stopped"
 			}
 			m.pending.buttons = []approveButton{{label: "Try again", keys: "enter", answer: true}, {label: "Cancel", keys: "esc ×2", answer: false}}
 		} else {
@@ -499,7 +498,7 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 		m.pending = nil
 		m.rollAt = time.Time{}
 		m.rollPaused = time.Time{}
-		m.retryUntil = time.Time{}
+		m.retry = nil
 		m.runDuration = time.Since(m.startedAt)
 		m.running = false
 		m.cancel = nil
@@ -991,6 +990,7 @@ func (m *model) startRunAt(sentAt time.Time, fn func(context.Context, *agent.Age
 	m.runGen++
 	m.frame, m.step = 0, 0
 	m.status = ""
+	m.retry = nil
 	m.stickBottom = true
 	m.refresh()
 
@@ -1040,12 +1040,14 @@ func (m *model) applyEvent(e agent.Event) {
 	m.responseTiming.observe(e)
 	switch e := e.(type) {
 	case agent.RetryWait:
-		m.retryUntil, m.retryAttempt = e.Until, e.Attempt
+		m.retry = &e
 	case agent.RequestRestart:
-		m.retryUntil = time.Time{}
+		m.retry = nil
 		clear(m.blocks[min(m.requestStart, len(m.blocks)):])
 		m.blocks = m.blocks[:min(m.requestStart, len(m.blocks))]
 		m.openDetail, m.openGroup = nil, nil
+	case agent.RequestRecovered:
+		m.appendSystem(fmt.Sprintf("Response recovered · retries: %d · %s", e.Retries, responseDuration(e.Elapsed)))
 	case agent.RequestTiming:
 		m.requestTimings = append(m.requestTimings, e)
 	case agent.ReasoningTime:
@@ -1489,6 +1491,10 @@ func (m *model) renderBlocks(width int) []string {
 	}
 	if m.running && !m.compacting && m.activity() != "" {
 		lines = append(lines, "", "  "+m.workingStrip(inner))
+	}
+	if m.running && m.retry != nil && m.pending == nil {
+		b := newBlock(blockSystem, m.retry.Reason)
+		lines = append(lines, m.blockLines(b, inner, false)...)
 	}
 	if m.running && !m.responseTiming.start.IsZero() {
 		// Use the ordinary muted block renderer so narrow terminals wrap the

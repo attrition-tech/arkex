@@ -5,13 +5,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"charm.land/fantasy"
 
 	"github.com/attrition-tech/arkex/internal/agent"
+	"github.com/attrition-tech/arkex/internal/config"
+	"github.com/attrition-tech/arkex/internal/provider"
 )
 
 // scripted replays a fixed event list and returns err from Run.
@@ -33,13 +39,16 @@ func TestPrintSeparatesTextFromToolActivity(t *testing.T) {
 	r := &scripted{events: []agent.Event{
 		agent.TurnStart{},
 		agent.TextDelta{Text: "Let me look"}, // partial line, no newline
+		agent.TurnEnd{},
 		agent.ToolCall{ID: "c1", Name: "bash", Input: "{\"command\":\n  \"ls   -la\"}"},
 		agent.ToolDecision{ID: "c1", Name: "bash", Allowed: true},
 		agent.ToolResult{ID: "c1", Name: "bash", Summary: "ls -la", Duration: 12 * time.Millisecond},
 		agent.ToolCall{ID: "c2", Name: "edit", Input: `{"path":"x"}`},
 		agent.ToolDecision{ID: "c2", Name: "edit", Allowed: false, Reason: "denied by config"},
 		agent.ToolResult{ID: "c2", Name: "edit", IsError: true, Output: "denied\nby policy"},
+		agent.TurnStart{},
 		agent.TextDelta{Text: "Done."},
+		agent.TurnEnd{},
 		agent.RunEnd{Steps: 2, Usage: fantasy.Usage{InputTokens: 100, OutputTokens: 7}},
 	}}
 	var out, errOut bytes.Buffer
@@ -68,6 +77,7 @@ func TestPrintSeparatesTextFromToolActivity(t *testing.T) {
 func TestPrintDoesNotAddNewlineWhenTextAlreadyEnds(t *testing.T) {
 	r := &scripted{events: []agent.Event{
 		agent.TextDelta{Text: "line\n"},
+		agent.TurnEnd{},
 		agent.RunEnd{Steps: 1},
 	}}
 	var out, errOut bytes.Buffer
@@ -131,7 +141,7 @@ func TestEventNameCoversEveryEvent(t *testing.T) {
 		agent.TurnStart{}, agent.TextDelta{}, agent.ReasoningDelta{}, agent.ToolCallStart{},
 		agent.ToolCallInputDelta{}, agent.ToolCall{}, agent.ToolDecision{}, agent.ToolResult{},
 		agent.ReasoningTime{}, agent.RequestTiming{}, agent.RequestSent{},
-		agent.RetryWait{}, agent.RequestRestart{},
+		agent.RetryWait{}, agent.RequestRestart{}, agent.RequestRecovered{},
 		agent.TurnEnd{}, agent.Compacting{}, agent.RunEnd{},
 	}
 	seen := map[string]bool{}
@@ -165,7 +175,7 @@ func TestPrintReportsOutputFailure(t *testing.T) {
 		if diagnostic {
 			out, errOut = &good, failedWriter{want}
 		}
-		r := &scripted{events: []agent.Event{agent.TextDelta{Text: "hello"}, agent.RunEnd{}}}
+		r := &scripted{events: []agent.Event{agent.TextDelta{Text: "hello"}, agent.TurnEnd{}, agent.RunEnd{}}}
 		if err := Print(t.Context(), r, "test", out, errOut); !errors.Is(err, want) {
 			t.Fatalf("diagnostic=%v: %v", diagnostic, err)
 		}
@@ -196,5 +206,44 @@ func TestCompactionEventsReachNoninteractiveConsumers(t *testing.T) {
 	}
 	if out.Len() != 0 || !strings.Contains(diagnostic.String(), "waiting for model") {
 		t.Fatal("progress mixed into stdout or lost")
+	}
+}
+
+func TestPrintDiscardsInterruptedResponses(t *testing.T) {
+	for _, recover := range []bool{true, false} {
+		t.Run(fmt.Sprintf("recover=%v", recover), func(t *testing.T) {
+			t.Parallel()
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "text/event-stream")
+				n := calls.Add(1)
+				text := "UNFINISHED "
+				if n > 1 && recover {
+					text = "RECOVERED"
+				}
+				_, _ = fmt.Fprintf(w, "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":%q},\"finish_reason\":null}]}\n\n", text)
+				if n > 1 && recover {
+					_, _ = fmt.Fprint(w, "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+				}
+			}))
+			defer server.Close()
+			m, err := provider.Open(t.Context(), config.ModelRef{Conn: config.Connection{BaseURL: server.URL}, Model: config.Model{ID: "test"}}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			a := &agent.Agent{Model: m, Policy: agent.AllowAll{}}
+			var out, diagnostics bytes.Buffer
+			err = Print(t.Context(), a, "test", &out, &diagnostics)
+			if recover {
+				if err != nil || out.String() != "RECOVERED\n" || calls.Load() != 2 || !strings.Contains(diagnostics.String(), "response recovered") {
+					t.Fatalf("err=%v requests=%d out=%q diagnostics=%q", err, calls.Load(), out.String(), diagnostics.String())
+				}
+			} else if !errors.Is(err, agent.ErrIncompleteResponse) || out.Len() != 0 || calls.Load() != 3 || strings.Contains(diagnostics.String(), "response recovered") {
+				t.Fatalf("failed attempt appeared complete: err=%v out=%q diagnostics=%q", err, out.String(), diagnostics.String())
+			}
+			if !strings.Contains(diagnostics.String(), "retry 1/2") || !strings.Contains(diagnostics.String(), "without a completion event") {
+				t.Fatalf("missing retry diagnostic: %s", diagnostics.String())
+			}
+		})
 	}
 }

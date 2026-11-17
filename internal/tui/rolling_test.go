@@ -149,8 +149,8 @@ func TestInvalidResponseDialog(t *testing.T) {
 		err   error
 		title string
 	}{
-		{agent.ErrIncompleteResponse, "Incomplete response · 2 retries exhausted"},
-		{agent.ErrMalformedToolResponse, "Malformed tool response · 2 retries exhausted"},
+		{agent.ErrIncompleteResponse, "Incomplete response · automatic recovery stopped"},
+		{agent.ErrMalformedToolResponse, "Malformed tool response · automatic recovery stopped"},
 	} {
 		m, _ := testModel(t)
 		reply := make(chan bool, 1)
@@ -161,6 +161,32 @@ func TestInvalidResponseDialog(t *testing.T) {
 		typeKeys(m, "esc", "esc")
 		if got := <-reply; got || m.pending != nil {
 			t.Fatal("cancel failed")
+		}
+	}
+}
+
+func TestRetryNoticesAndRecovery(t *testing.T) {
+	for _, limit := range []int{2, 3} {
+		m, _ := testModel(t)
+		m.running = true
+		m.blocks = []*block{newBlock(blockUser, "hi"), groupTool("edit", "saved.go")}
+		m.applyEvent(agent.TurnStart{Step: 2})
+		m.applyEvent(agent.TextDelta{Text: "unfinished"})
+		m.applyEvent(agent.RetryWait{Attempt: 1, Limit: limit, Until: time.Now().Add(12 * time.Second), Reason: "connection reset by peer", Partial: true})
+		plain := func() string { return ansi.Strip(strings.Join(m.renderBlocks(100), "\n")) }
+		for _, want := range []string{fmt.Sprintf("1/%d", limit), "Retrying in", "connection reset by peer", "esc ×2 cancel"} {
+			if !strings.Contains(plain(), want) {
+				t.Fatalf("missing %s: %s", want, plain())
+			}
+		}
+		m.applyEvent(agent.RequestRestart{Partial: true})
+		m.applyEvent(agent.TextDelta{Text: "Replacement answer"})
+		m.applyEvent(agent.RequestRecovered{Retries: 1, Elapsed: 1300 * time.Millisecond})
+		m.applyEvent(agent.TurnEnd{})
+		m.Update(runDoneMsg{})
+		got := plain()
+		if !strings.Contains(got, "Response recovered · retries: 1 · 1.3s") || !strings.Contains(got, "Replacement answer") || strings.Contains(got, "unfinished") || strings.Contains(got, "Retrying in") {
+			t.Fatal(got)
 		}
 	}
 }

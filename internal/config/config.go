@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/attrition-tech/arkex/internal/tools"
 )
@@ -129,9 +130,33 @@ type Connection struct {
 	Headers      map[string]string `json:"headers,omitempty"`
 	Compat       Compat            `json:"compat,omitempty"`
 	Models       []Model           `json:"models"`
+	// Positive Go durations; empty uses the inference defaults, not a total deadline.
+	HeaderTimeout string `json:"headerTimeout,omitempty"`
+	IdleTimeout   string `json:"idleTimeout,omitempty"`
 	// Disabled keeps the connection configured but makes all of its models
 	// unavailable for selection.
 	Disabled bool `json:"disabled,omitempty"`
+}
+
+// Timeouts resolves the inference response-header and body-inactivity limits.
+func (c Connection) Timeouts() (header, idle time.Duration, err error) {
+	header, idle = 5*time.Minute, 15*time.Minute
+	for _, setting := range []struct {
+		name, value string
+		dst         *time.Duration
+	}{
+		{"headerTimeout", c.HeaderTimeout, &header},
+		{"idleTimeout", c.IdleTimeout, &idle},
+	} {
+		if setting.value == "" {
+			continue
+		}
+		*setting.dst, err = time.ParseDuration(setting.value)
+		if err != nil || *setting.dst <= 0 {
+			return 0, 0, fmt.Errorf("%s must be a positive duration, such as 30s or 5m", setting.name)
+		}
+	}
+	return header, idle, nil
 }
 
 // EnabledModels returns the models that can be selected.

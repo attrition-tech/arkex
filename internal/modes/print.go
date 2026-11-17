@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/attrition-tech/arkex/internal/agent"
 	"github.com/attrition-tech/arkex/internal/sanitize"
@@ -18,11 +19,12 @@ type Runner interface {
 	Run(ctx context.Context, prompt string, emit func(agent.Event)) error
 }
 
-// Print runs one prompt and writes assistant text to out. Tool activity
-// goes to errOut so stdout stays pipeable.
+// Print writes only completed assistant responses to out. Attempts are buffered
+// so a retry cannot mix abandoned text into a pipe. Diagnostics go to errOut.
 func Print(ctx context.Context, ag Runner, prompt string, out, errOut io.Writer) error {
 	wroteText := false
 	atLineStart := true
+	var pending strings.Builder
 	var writeErr error
 	write := func(n int, err error) {
 		if writeErr == nil {
@@ -39,11 +41,28 @@ func Print(ctx context.Context, ag Runner, prompt string, out, errOut io.Writer)
 	}
 	err := ag.Run(ctx, prompt, func(e agent.Event) {
 		switch e := e.(type) {
+		case agent.TurnStart, agent.RequestRestart:
+			pending.Reset()
 		case agent.TextDelta:
-			wroteText = true
-			text := sanitize.Terminal(e.Text)
-			write(fmt.Fprint(out, text))
-			atLineStart = strings.HasSuffix(text, "\n")
+			pending.WriteString(sanitize.Terminal(e.Text))
+		case agent.TurnEnd:
+			if pending.Len() > 0 {
+				wroteText = true
+				text := pending.String()
+				write(fmt.Fprint(out, text))
+				atLineStart = strings.HasSuffix(text, "\n")
+				pending.Reset()
+			}
+		case agent.RetryWait:
+			breakLine()
+			attempt := fmt.Sprintf("retry %d/%d", e.Attempt, e.Limit)
+			if e.Attempt == 0 {
+				attempt = "requested retry"
+			}
+			write(fmt.Fprintf(errOut, "[%s in %s: %s]\n", attempt, max(0, time.Until(e.Until)).Round(time.Millisecond), oneLine(sanitize.Terminal(e.Reason), 300)))
+		case agent.RequestRecovered:
+			breakLine()
+			write(fmt.Fprintf(errOut, "[response recovered · retries: %d · %s]\n", e.Retries, e.Elapsed.Round(time.Millisecond)))
 		case agent.ToolCall:
 			breakLine()
 			write(fmt.Fprintf(errOut, "→ %s %s\n", e.Name, oneLine(sanitize.Terminal(e.Input), 100)))
@@ -105,6 +124,8 @@ func eventName(e agent.Event) string {
 		return "retry_wait"
 	case agent.RequestRestart:
 		return "request_restart"
+	case agent.RequestRecovered:
+		return "request_recovered"
 	case agent.TextDelta:
 		return "text_delta"
 	case agent.ReasoningDelta:

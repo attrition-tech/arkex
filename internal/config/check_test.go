@@ -514,3 +514,17 @@ func TestCheckSyntaxError(t *testing.T) {
 		t.Fatalf("got:\n%s", got)
 	}
 }
+
+func TestCheckConnectionTimeouts(t *testing.T) {
+	for _, settings := range []string{
+		`"headerTimeout":"40s","idleTimeout":"20m"`,
+		`"headerTimeout":"-1s"`, `"idleTimeout":"0s"`, `"idleTimeout":"forever"`,
+	} {
+		writeGlobal(t, `{"version":5,"connections":{"test":{"kind":"llm-server","baseUrl":"http://localhost/v1","apiKey":"test-only","models":[{"id":"m"}],`+settings+`}},"default":"test/m"}`)
+		r := Check("")
+		valid := strings.Contains(settings, "40s")
+		if valid && len(r.Problems) != 0 || !valid && (r.Errors() != 1 || !strings.Contains(problemText(r), "positive duration")) {
+			t.Fatalf("%s: %s", settings, problemText(r))
+		}
+	}
+}

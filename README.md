@@ -79,6 +79,33 @@ Configuration and sessions stay in `~/.arkex/`. API keys can reference environme
 variables instead of being stored directly, for example `"apiKey": "$MY_API_KEY"`.
 Prompts and relevant project content are sent to the model provider you choose.
 
+### Disconnects, retries and timeouts
+
+Transient connection errors, including failures after partial output, restart
+the current response from completed conversation history. They do not resume at
+the last character. Arkex allows up to three transient retries, or two for
+incomplete/malformed responses, sharing one counter and a 30-second automatic
+backoff budget per response. This budget covers waits, not generation time.
+Backoff starts near one second and doubles with jitter; `Retry-After` can extend
+it. If the retry count or wait budget is exhausted, the TUI offers **Try again**
+or **Cancel**; noninteractive runs return an error. A manually approved retry
+still honors the remaining server delay. Authentication and invalid-request
+errors do not enter this retry loop. Esc twice cancels, including during backoff.
+
+The TUI shows the failure reason, retry count and countdown, then a recovery
+notice only after a replacement response completes. Partial text from failed
+attempts is discarded on restart. Local tools run only after a complete response;
+completed tool results remain in history and are not re-executed by the retry
+loop. This is not an exactly-once guarantee for newly generated tool calls or
+provider-side effects.
+
+Inference has separate timeouts: **five minutes to receive response headers**
+and **15 minutes waiting for stream bytes**. Heartbeats count as activity. There
+is no total-generation deadline, so an active long response can finish. Override
+these per connection with positive Go duration strings such as
+`"headerTimeout": "2m"` and `"idleTimeout": "5m"`; `arkex config check` validates
+them. Compaction and explicit connection/reasoning checks keep their own limits.
+
 ### Check reasoning on a custom server
 
 While idle, open **Reasoning effort** (`/effort`) and choose **Check reasoning…**.
@@ -146,6 +173,13 @@ arkex                                 # interactive session
 arkex -c                              # resume the latest session here
 arkex -p "explain this project"        # one-shot answer
 ```
+
+Plain `-p` output buffers each assistant response until it completes, keeping
+abandoned attempts out of stdout; retry and recovery notices go to stderr.
+Use `--json` with `-p` for live newline-delimited events. JSON consumers should
+discard the current attempt's deltas on `request_restart`; `retry_wait` includes
+the reason, attempt, limit, deadline and whether output was partial, and
+`request_recovered` confirms that the replacement completed.
 
 Tools do not require routine per-call approval. Permission policy uses only
 `"allow"` and `"deny"`; known tools are allowed by default and unknown tools are

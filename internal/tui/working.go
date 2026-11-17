@@ -103,8 +103,12 @@ func (m *model) activity() string {
 	if m.status != "" {
 		return m.status
 	}
-	if !m.retryUntil.IsZero() {
-		return fmt.Sprintf("Connection interrupted · retrying in %s · %d/3", max(time.Duration(0), time.Until(m.retryUntil)).Round(time.Second), m.retryAttempt)
+	if m.retry != nil {
+		attempt := fmt.Sprintf("%d/%d", m.retry.Attempt, m.retry.Limit)
+		if m.retry.Attempt == 0 {
+			attempt = "requested"
+		}
+		return fmt.Sprintf("Retrying in %s · %s · esc ×2 cancel", responseDuration(max(0, time.Until(m.retry.Until))), attempt)
 	}
 	n := len(m.blocks)
 	if n == 0 {

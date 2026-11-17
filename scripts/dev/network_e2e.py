@@ -61,7 +61,7 @@ for mode in ["recover", "partial", "exhaust", "cancel", "partialcancel", "waitca
             tmux("send-keys", "-t", "test", "-l", "network-test " + mode + " " + key)
             tmux("send-keys", "-t", "test", "Enter")
             if mode == "malformedexhaust":
-                wait(lambda s: "2 retries exhausted" in s and "Try again" in s, "missing invalid-response exhaustion dialog")
+                wait(lambda s: "automatic recovery stopped after 2 retries" in s and "Try again" in s, "missing invalid-response exhaustion dialog")
                 assert state(key)["requests"] == 4
                 capture(mode)
                 tmux("send-keys", "-t", "test", "Enter")
@@ -72,23 +72,22 @@ for mode in ["recover", "partial", "exhaust", "cancel", "partialcancel", "waitca
                 time.sleep(.2)
                 tmux("send-keys", "-t", "test", "Escape")
             elif mode in ("partial", "partialcancel"):
-                wait(lambda s: "Try again" in s and "Response interrupted" in s, "partial response did not ask")
+                notice = wait(lambda s: "Retrying in" in s and "1/3" in s, "partial response did not auto-retry")
+                assert "Try again" not in notice, "asked before the automatic retry budget was spent"
                 assert state(key)["requests"] == 2
                 capture(mode)
-                time.sleep(.5)
-                assert state(key)["requests"] == 2, "partial response restarted without consent"
-                tmux("send-keys", "-t", "test", "Enter" if mode == "partial" else "Escape")
                 if mode == "partialcancel":
+                    tmux("send-keys", "-t", "test", "Escape")
                     wait(lambda s: "Press Esc again" in s, "missing retry cancel confirmation")
                     time.sleep(.2)
                     tmux("send-keys", "-t", "test", "Escape")
             elif mode in ("exhaust", "cancel"):
-                wait(lambda s: "3 retries exhausted" in s and "Try again" in s, "missing exhaustion dialog")
+                wait(lambda s: "automatic recovery stopped after 3 retries" in s and "Try again" in s, "missing exhaustion dialog")
                 assert state(key)["requests"] == 5
                 capture(mode)
                 if mode == "exhaust":
                     tmux("send-keys", "-t", "test", "Enter")
-                    wait(lambda s: "3 retries exhausted" in s and state(key)["requests"] == 9, "second retry cycle failed")
+                    wait(lambda s: "automatic recovery stopped after 3 retries" in s and state(key)["requests"] == 9, "second retry cycle failed")
                     tmux("send-keys", "-t", "test", "Enter")
                 else:
                     # Click Cancel through the actual mouse input path.
@@ -123,6 +122,9 @@ for mode in ["recover", "partial", "exhaust", "cancel", "partialcancel", "waitca
             if not canceled:
                 assert "UNFINISHED_NETWORK" not in screen(), "interrupted response remains visible"
                 assert "Interrupted response discarded" not in screen(), "successful retry polluted transcript"
+                assert "Response recovered" in screen(), "successful recovery was not reported"
+            else:
+                assert "Response recovered" not in screen(), "cancelled request reported success"
             capture(mode + "-done")
             print(f"PASS {mode}: requests={expected}; command executions=1; completed result retained; partial history absent", flush=True)
         finally:

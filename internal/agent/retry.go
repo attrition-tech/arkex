@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand/v2"
 	"net"
@@ -17,11 +18,22 @@ import (
 )
 
 type RetryWait struct {
-	Attempt int       `json:"attempt"`
+	Attempt int       `json:"attempt"` // zero for a manually requested retry
+	Limit   int       `json:"limit"`
 	Until   time.Time `json:"until"`
+	Reason  string    `json:"reason"`
+	Partial bool      `json:"partial"`
 }
 
 func (RetryWait) isEvent() {}
+
+// RequestRecovered is emitted only after a restarted response completes.
+type RequestRecovered struct {
+	Retries int           `json:"retries"`
+	Elapsed time.Duration `json:"elapsed_ns"`
+}
+
+func (RequestRecovered) isEvent() {}
 
 // RequestRestart discards only the interrupted attempt's UI output.
 type RequestRestart struct {
@@ -80,6 +92,9 @@ func retryableRequestError(err error) bool {
 			return false
 		}
 	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
 	var ne net.Error
 	if errors.As(err, &ne) && ne.Timeout() {
 		return true
@@ -105,25 +120,35 @@ func retryableRequestError(err error) bool {
 	return false
 }
 
-func retryDelay(err error, attempt int) time.Duration {
-	d := time.Second*time.Duration(1<<attempt) + time.Duration(rand.IntN(250))*time.Millisecond
+func retryAfter(err error) time.Duration {
 	var pe *fantasy.ProviderError
 	if errors.As(err, &pe) {
 		for k, v := range pe.ResponseHeaders {
 			if strings.EqualFold(k, "Retry-After") {
-				if seconds, e := strconv.ParseFloat(v, 64); e == nil && seconds > 0 && seconds < 86400 {
-					return max(d, time.Duration(seconds*float64(time.Second)))
+				if seconds, e := strconv.ParseFloat(v, 64); e == nil && seconds > 0 {
+					// Saturate instead of overflowing or ignoring a very long delay.
+					seconds = min(seconds, float64((1<<63-1)/int64(time.Second)))
+					return time.Duration(seconds * float64(time.Second))
 				}
 				if at, e := http.ParseTime(v); e == nil {
-					return max(d, time.Until(at))
+					return max(0, time.Until(at))
 				}
 			}
 		}
 	}
-	return d
+	return 0
+}
+
+func retryDelay(err error, attempt int) time.Duration {
+	d := time.Second*time.Duration(1<<attempt) + time.Duration(rand.IntN(250))*time.Millisecond
+	return max(d, retryAfter(err))
 }
 
 func (a *Agent) streamWithRetry(ctx context.Context, emit func(Event)) (turnResult, error) {
+	const maxAutomaticWait = 30 * time.Second
+	var waited time.Duration
+	var interrupted time.Time
+	retries := 0
 	for attempt := 0; ; {
 		partial := false
 		turn, err := a.stream(ctx, func(e Event) {
@@ -137,27 +162,56 @@ func (a *Agent) streamWithRetry(ctx context.Context, emit func(Event)) (turnResu
 			}
 			emit(e)
 		})
-		if err == nil || ctx.Err() != nil {
+		if ctx.Err() != nil {
+			return turn, ctx.Err()
+		}
+		if err == nil {
+			if retries > 0 {
+				emit(RequestRecovered{Retries: retries, Elapsed: time.Since(interrupted)})
+			}
 			return turn, err
 		}
 		invalid := errors.Is(err, ErrIncompleteResponse) || errors.Is(err, ErrMalformedToolResponse)
 		if !invalid && !retryableRequestError(err) {
 			return turn, err
 		}
-		// Invalid responses never execute tools. Retry them twice even when
-		// text streamed; other partial failures still require consent.
-		if (invalid && attempt >= 2) || (!invalid && (partial || attempt >= 3)) {
-			if a.Retry == nil {
-				return turn, err
+		if interrupted.IsZero() {
+			interrupted = time.Now()
+		}
+		limit := 3
+		if invalid {
+			limit = 2
+		}
+		// Tools execute only after a complete successful stream, so partial
+		// text is safe to replace. All failure classes share this allowance.
+		d := retryDelay(err, attempt)
+		advice := retryAfter(err)
+		advisedUntil := time.Now().Add(advice)
+		reason := err.Error()
+		if attempt >= limit || d > maxAutomaticWait-waited {
+			stopped := fmt.Errorf("automatic recovery stopped after %d retries: %w", attempt, err)
+			if attempt < limit {
+				stopped = fmt.Errorf("next retry needs a %s delay, exceeding the remaining automatic wait budget: %w", d.Round(time.Second), err)
 			}
-			if !a.Retry(ctx, err, partial) {
+			if a.Retry == nil {
+				return turn, stopped
+			}
+			if !a.Retry(ctx, stopped, partial) {
 				return turn, context.Canceled
 			}
-			attempt = 0
+			attempt, waited = 0, 0
+			// Consent grants another bounded cycle, not permission to ignore
+			// Retry-After. Time spent in the dialog counts toward that deadline.
+			d = max(0, time.Until(advisedUntil))
 		} else {
-			d := retryDelay(err, attempt)
 			attempt++
-			emit(RetryWait{Attempt: attempt, Until: time.Now().Add(d)})
+			waited += d
+		}
+		if ctx.Err() != nil {
+			return turn, ctx.Err()
+		}
+		if d > 0 {
+			emit(RetryWait{Attempt: attempt, Limit: limit, Until: time.Now().Add(d), Reason: reason, Partial: partial})
 			timer := time.NewTimer(d)
 			select {
 			case <-ctx.Done():
@@ -169,6 +223,7 @@ func (a *Agent) streamWithRetry(ctx context.Context, emit func(Event)) (turnResu
 		if ctx.Err() != nil {
 			return turn, ctx.Err()
 		}
+		retries++
 		emit(RequestRestart{Partial: partial})
 	}
 }

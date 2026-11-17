@@ -27,7 +27,7 @@ type Agent struct {
 	// session history path. Compaction requires this hook and waits for it.
 	// A nil error commits the boundary, even if cancellation races the save.
 	StoreContext func(context.Context, []fantasy.Message) (string, error)
-	// Retry asks before restarting partial output or after automatic retries.
+	// Retry asks after automatic recovery stops. Completed tools stay intact.
 	// Nil returns the error (noninteractive consumers never wait for input).
 	Retry func(context.Context, error, bool) bool
 	// MaxSteps, when > 0, caps model↔tool round trips; connection probes

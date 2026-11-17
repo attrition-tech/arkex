@@ -159,7 +159,7 @@ func (s *Session) HistoryReader() func(context.Context) ([]fantasy.Message, erro
 		if err != nil {
 			return nil, err
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		var saved struct {
 			History  []fantasy.Message `json:"history"`
 			Messages []fantasy.Message `json:"messages"`

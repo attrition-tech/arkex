@@ -172,7 +172,7 @@ func TestReinstallAttemptsSameVersionButNeverDowngradesOrResetsOnFailure(t *test
 			var downloads atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path == "/stable.json" {
-					fmt.Fprintf(w, `{"version":%q}`, tc.candidate)
+					_, _ = fmt.Fprintf(w, `{"version":%q}`, tc.candidate)
 					return
 				}
 				downloads.Add(1)

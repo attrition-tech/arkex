@@ -87,18 +87,18 @@ func planConfigReset(all bool) (configResetPlan, error) {
 func (p configResetPlan) describe(cmd *cobra.Command) {
 	out := cmd.OutOrStdout()
 	if len(p.names) == 0 {
-		fmt.Fprintln(out, "Nothing to reset in", p.home)
+		_, _ = fmt.Fprintln(out, "Nothing to reset in", p.home)
 		return
 	}
-	fmt.Fprintln(out, "Close other Arkex processes first. Back up and reset:")
+	_, _ = fmt.Fprintln(out, "Close other Arkex processes first. Back up and reset:")
 	for _, name := range p.names {
-		fmt.Fprintln(out, " ", filepath.Join(p.home, name))
+		_, _ = fmt.Fprintln(out, " ", filepath.Join(p.home, name))
 	}
-	fmt.Fprintln(out, "Keep: executable, project settings, workspace files and existing backups.")
+	_, _ = fmt.Fprintln(out, "Keep: executable, project settings, workspace files and existing backups.")
 	if !p.all {
-		fmt.Fprintln(out, "Keep: local ChatGPT sign-ins and saved sessions.")
+		_, _ = fmt.Fprintln(out, "Keep: local ChatGPT sign-ins and saved sessions.")
 	}
-	fmt.Fprintln(out, "A private backup will retain the selected data, including any credentials; remote access is not revoked.")
+	_, _ = fmt.Fprintln(out, "A private backup will retain the selected data, including any credentials; remote access is not revoked.")
 }
 
 func confirmConfigReset(cmd *cobra.Command, yes bool) error {
@@ -108,7 +108,7 @@ func confirmConfigReset(cmd *cobra.Command, yes bool) error {
 	if yes {
 		return nil
 	}
-	fmt.Fprint(cmd.OutOrStdout(), "Type reset to confirm (or use --yes in scripts): ")
+	_, _ = fmt.Fprint(cmd.OutOrStdout(), "Type reset to confirm (or use --yes in scripts): ")
 	scanner := bufio.NewScanner(cmd.InOrStdin())
 	if !scanner.Scan() || strings.TrimSpace(scanner.Text()) != "reset" {
 		return errors.New("reset cancelled; nothing changed")
@@ -122,10 +122,10 @@ func (p configResetPlan) apply(cmd *cobra.Command) error {
 		return err
 	}
 	if backup != "" {
-		fmt.Fprintln(cmd.OutOrStdout(), "Reset complete. Backup:", backup)
-		fmt.Fprintln(cmd.OutOrStdout(), "To restore, close Arkex and move the selected entries from that backup to:", p.home)
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Reset complete. Backup:", backup)
+		_, _ = fmt.Fprintln(cmd.OutOrStdout(), "To restore, close Arkex and move the selected entries from that backup to:", p.home)
 	}
-	fmt.Fprintln(cmd.OutOrStdout(), "Run arkex to set up your connections again. Project .arkex/config.json still applies.")
+	_, _ = fmt.Fprintln(cmd.OutOrStdout(), "Run arkex to set up your connections again. Project .arkex/config.json still applies.")
 	return nil
 }
 

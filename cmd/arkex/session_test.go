@@ -130,9 +130,9 @@ func TestPrintResumeRecoversArchivedHistoryThroughTools(t *testing.T) {
 				requests <- string(body)
 				w.Header().Set("Content-Type", "text/event-stream")
 				if count.Add(1) == 1 {
-					fmt.Fprintf(w, "data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"h1\",\"type\":\"function\",\"function\":{\"name\":\"history\",\"arguments\":%q}}]}}]}\n\ndata: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n", args)
+					_, _ = fmt.Fprintf(w, "data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"h1\",\"type\":\"function\",\"function\":{\"name\":\"history\",\"arguments\":%q}}]}}]}\n\ndata: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n", args)
 				} else {
-					fmt.Fprint(w, "data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Checked saved history.\"}}]}\n\ndata: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+					_, _ = fmt.Fprint(w, "data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"Checked saved history.\"}}]}\n\ndata: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
 				}
 			}))
 			defer server.Close()
@@ -165,9 +165,10 @@ func TestPrintResumeRecoversArchivedHistoryThroughTools(t *testing.T) {
 				t.Fatal("archive content was reinserted without a retrieval request")
 			}
 			want := original
-			if mode == "attachment" {
+			switch mode {
+			case "attachment":
 				want = "data:image/png;base64,ABH/"
-			} else if mode == "denied" {
+			case "denied":
 				want = "denied"
 				if strings.Contains(second, original) {
 					t.Fatal("history bypassed deny permission")

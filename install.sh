@@ -9,6 +9,9 @@
 #   --dir DIR            install directory (default: $ARKEX_HOME/bin or ~/.arkex/bin)
 #   --no-modify-path     do not add the install dir to your shell rc files
 #   --uninstall          remove the binary and PATH lines this script added
+#   --fresh --yes        reinstall, then back up/reset settings, sign-ins and sessions
+#                       close other Arkex processes first; project files are kept
+#   Running this installer again without --fresh keeps all configuration and history.
 #
 # Environment: ARKEX_HOME, ARKEX_INSTALL_DIR, ARKEX_VERSION,
 #   ARKEX_DOWNLOAD_BASE (release host; default https://get.arkex.dev).
@@ -26,6 +29,8 @@ REQUIRE_SIG="${ARKEX_REQUIRE_SIGNATURE:-}"
 INSTALL_DIR="${ARKEX_INSTALL_DIR:-}"
 MODIFY_PATH=1
 UNINSTALL=0
+FRESH=0
+YES=0
 
 # ed25519 release key (SubjectPublicKeyInfo). Must match internal/update/keys.txt.
 PUBKEY_PEM='-----BEGIN PUBLIC KEY-----
@@ -42,7 +47,9 @@ while [ $# -gt 0 ]; do
     --dir=*) INSTALL_DIR="${1#*=}"; shift ;;
     --no-modify-path) MODIFY_PATH=0; shift ;;
     --uninstall) UNINSTALL=1; shift ;;
-    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+    --fresh) FRESH=1; shift ;;
+    --yes|-y) YES=1; shift ;;
+    -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
@@ -54,6 +61,13 @@ fi
 say()  { printf '%s\n' "$*" >&2; }
 fail() { say "error: $*"; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
+
+if [ "$FRESH" = 1 ]; then
+  [ "$UNINSTALL" = 0 ] || fail "--fresh cannot be combined with --uninstall"
+  [ "$YES" = 1 ] || fail "--fresh requires --yes to confirm resetting settings, local sign-ins and saved sessions (with a private backup). Close other Arkex processes first."
+elif [ "$YES" = 1 ]; then
+  fail "--yes is only used with --fresh"
+fi
 
 fetch() { # fetch URL [OUT]
   if have curl; then
@@ -177,6 +191,12 @@ cp "$tmp/$BIN" "$INSTALL_DIR/.$BIN.new"
 chmod 755 "$INSTALL_DIR/.$BIN.new"
 mv -f "$INSTALL_DIR/.$BIN.new" "$INSTALL_DIR/$BIN"
 say "installed $INSTALL_DIR/$BIN ($("$INSTALL_DIR/$BIN" --version 2>/dev/null || echo "$tag"))"
+
+# Reset only after the verified replacement is installed. Use the CLI's scoped,
+# backup-preserving implementation instead of recursively deleting ARKEX_HOME.
+if [ "$FRESH" = 1 ]; then
+  "$INSTALL_DIR/$BIN" config reset --all --yes || fail "binary installed, but fresh reset did not complete"
+fi
 
 # --- PATH -------------------------------------------------------------------
 case ":$PATH:" in

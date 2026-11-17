@@ -520,6 +520,7 @@ const starterConfig = `{
 func newConfigCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "config", Short: "Manage arkex configuration"}
 	cmd.AddCommand(
+		newConfigResetCmd(),
 		&cobra.Command{
 			Use:   "path",
 			Short: "Print the global config file path",

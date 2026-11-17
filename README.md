@@ -27,6 +27,38 @@ enabled. On macOS, arkex uses the built-in `/usr/bin/sandbox-exec`. If the
 platform sandbox is unavailable, affected tool execution is blocked. Windows is
 not supported.
 
+### Reinstall or start fresh
+
+Close other Arkex processes before resetting state. These commands also work
+when `config.json` is invalid:
+
+| Command | Effect |
+| --- | --- |
+| `arkex config reset --dry-run` | Show the exact global configuration paths; change nothing. |
+| `arkex config reset` (or `config flush`) | Reset settings, connections and configured API keys; keep ChatGPT sign-ins and sessions. |
+| `arkex config reset --all` | Also reset local sign-ins and saved sessions for **all workspaces**, including history snapshots. |
+| `arkex update --reinstall` | Download, verify and replace the binary even at the same version; keep all data. |
+| `arkex update --fresh` | Reinstall, then perform the full reset only after installation succeeds. |
+
+Reset requires typing `reset` at the prompt, or passing `--yes` explicitly.
+Selected entries move to a private `.reset-backup-*` directory inside
+`~/.arkex` (or `$ARKEX_HOME`); the command prints its exact path. To restore,
+close Arkex and move those entries back, preserving any newer state first.
+**Backups retain credentials and conversation contents.** This is a recoverable
+reset, not secure erasure or remote OAuth revocation; disconnect Arkex in ChatGPT
+Settings if you also want to revoke access.
+
+Neither reset scope changes your executable, workspace files, project-local
+`.arkex/config.json`, unrelated files, or previous backups. Project settings
+continue to apply. Reinstall refuses to downgrade a newer installed release.
+
+If the binary cannot run, rerun the installer to replace it while preserving
+data. To explicitly request a fresh install instead, pass `--fresh --yes`:
+
+```sh
+curl -fsSL https://get.arkex.dev/install.sh | sh -s -- --fresh --yes
+```
+
 ## Configure
 
 Run `arkex` in your project, open `/connections`, and add your model server,

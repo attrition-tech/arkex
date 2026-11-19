@@ -29,24 +29,27 @@ import (
 
 // Session is one conversation and the state needed to continue it.
 type Session struct {
-	ID           string             `json:"id"`
-	Cwd          string             `json:"cwd"`
-	Title        string             `json:"title"`
-	Model        string             `json:"model,omitempty"`
-	Effort       *string            `json:"effort,omitempty"` // nil = legacy; empty string = provider default
-	State        string             `json:"state,omitempty"`  // empty = active; archived or trash
-	Created      time.Time          `json:"created"`
-	Updated      time.Time          `json:"updated"`
-	UsageIn      int64              `json:"usage_in,omitempty"`
-	UsageOut     int64              `json:"usage_out,omitempty"`
-	LastInput    int64              `json:"last_input,omitempty"` // latest request, not cumulative; zero means unknown
-	Messages     []fantasy.Message  `json:"messages"`
-	History      []fantasy.Message  `json:"history,omitempty"` // append-only context segments for prompt checkpoints
-	ContextStart int                `json:"context_start,omitempty"`
-	Prompts      []PromptCheckpoint `json:"prompts,omitempty"`
-	ParentID     string             `json:"parent_id,omitempty"`
-	savedHash    [sha256.Size]byte  // optimistic concurrency token; never serialized
-	saved        bool
+	ID            string             `json:"id"`
+	Cwd           string             `json:"cwd"`
+	Title         string             `json:"title"`
+	TitleState    string             `json:"title_state,omitempty"` // empty = legacy name, never automatically replaced
+	TitleUsageIn  int64              `json:"title_usage_in,omitempty"`
+	TitleUsageOut int64              `json:"title_usage_out,omitempty"`
+	Model         string             `json:"model,omitempty"`
+	Effort        *string            `json:"effort,omitempty"` // nil = legacy; empty string = provider default
+	State         string             `json:"state,omitempty"`  // empty = active; archived or trash
+	Created       time.Time          `json:"created"`
+	Updated       time.Time          `json:"updated"`
+	UsageIn       int64              `json:"usage_in,omitempty"`
+	UsageOut      int64              `json:"usage_out,omitempty"`
+	LastInput     int64              `json:"last_input,omitempty"` // latest request, not cumulative; zero means unknown
+	Messages      []fantasy.Message  `json:"messages"`
+	History       []fantasy.Message  `json:"history,omitempty"` // append-only context segments for prompt checkpoints
+	ContextStart  int                `json:"context_start,omitempty"`
+	Prompts       []PromptCheckpoint `json:"prompts,omitempty"`
+	ParentID      string             `json:"parent_id,omitempty"`
+	savedHash     [sha256.Size]byte  // optimistic concurrency token; never serialized
+	saved         bool
 }
 
 // Summary is what listings need: everything but the messages.
@@ -59,6 +62,13 @@ type Summary struct {
 }
 
 const maxTitle = 60
+
+const (
+	TitlePending   = "pending" // new session, automatic naming not attempted yet
+	TitleFallback  = "fallback"
+	TitleGenerated = "generated"
+	TitleManual    = "manual"
+)
 
 // Dir returns the directory holding cwd's sessions.
 func Dir(cwd string) (string, error) {
@@ -76,10 +86,11 @@ func New(cwd string) *Session {
 	var r [3]byte
 	_, _ = rand.Read(r[:])
 	return &Session{
-		ID:      now.Format("20060102-150405") + "-" + hex.EncodeToString(r[:]),
-		Cwd:     cwd,
-		Created: now,
-		Updated: now,
+		ID:         now.Format("20060102-150405") + "-" + hex.EncodeToString(r[:]),
+		Cwd:        cwd,
+		TitleState: TitlePending,
+		Created:    now,
+		Updated:    now,
 	}
 }
 

@@ -28,24 +28,42 @@ import (
 // fakeLM is an OpenAI-compatible chat endpoint answering from a script, one
 // response per request, recording every request body.
 type fakeLM struct {
-	mu       sync.Mutex
-	requests []map[string]any
-	script   []string // raw SSE bodies or JSON completions
+	mu            sync.Mutex
+	requests      []map[string]any
+	script        []string // raw SSE bodies or JSON completions
+	titleRequests []map[string]any
+	titles        []string // naming is independent of the scripted agent steps
 }
 
 func (f *fakeLM) handler(w http.ResponseWriter, r *http.Request) {
 	body, _ := io.ReadAll(r.Body)
 	var req map[string]any
 	_ = json.Unmarshal(body, &req)
+	titleRequest := false
+	if messages, ok := req["messages"].([]any); ok && len(messages) != 0 {
+		first, _ := messages[0].(map[string]any)
+		text, _ := first["content"].(string)
+		titleRequest = first["role"] == "system" && strings.HasPrefix(text, "Name this conversation for a session list.")
+	}
 	f.mu.Lock()
-	f.requests = append(f.requests, req)
-	idx := len(f.requests) - 1
+	var resp string
+	if titleRequest {
+		f.titleRequests = append(f.titleRequests, req)
+		resp = streamText("Test session title", 11)
+		if idx := len(f.titleRequests) - 1; idx < len(f.titles) {
+			resp = f.titles[idx]
+		}
+	} else {
+		f.requests = append(f.requests, req)
+		if idx := len(f.requests) - 1; idx < len(f.script) {
+			resp = f.script[idx]
+		}
+	}
 	f.mu.Unlock()
-	if idx >= len(f.script) {
+	if resp == "" {
 		http.Error(w, "no scripted response", http.StatusInternalServerError)
 		return
 	}
-	resp := f.script[idx]
 	if strings.HasPrefix(resp, "data:") {
 		w.Header().Set("Content-Type", "text/event-stream")
 	} else {
@@ -70,10 +88,6 @@ func streamText(text string, promptTokens int) string {
 func streamToolCall(id, path string) string {
 	return chunk(`{"role":"assistant","tool_calls":[{"index":0,"id":"`+id+`","type":"function","function":{"name":"read","arguments":"{\"path\":\"`+path+`\"}"}}]}`, "") +
 		chunk(`{}`, "tool_calls") + "data: [DONE]\n\n"
-}
-
-func jsonReply(text string) string {
-	return `{"id":"c1","object":"chat.completion","created":1,"model":"m","choices":[{"index":0,"message":{"role":"assistant","content":"` + text + `"},"finish_reason":"stop"}],"usage":{"prompt_tokens":50,"completion_tokens":10,"total_tokens":60}}`
 }
 
 // harness is a model whose background runs execute synchronously: startRun's

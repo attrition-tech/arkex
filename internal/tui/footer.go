@@ -102,6 +102,10 @@ func (m *model) footer() string {
 		hover:      m.hoverAct, pending: m.pending != nil,
 		retry: m.pending != nil && m.pending.title != "",
 	}
+	if m.conv != nil {
+		key.usageIn += m.conv.TitleUsageIn
+		key.usageOut += m.conv.TitleUsageOut
+	}
 	if m.inputRows > m.input.Height() {
 		key.inputRows = m.inputRows
 	}

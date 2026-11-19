@@ -81,6 +81,9 @@ var ErrRunStillActive = errors.New("agent did not stop; scratch files retained")
 func Run(ctx context.Context, o Options) (err error) {
 	m := newModel(o)
 	defer func() {
+		for _, job := range m.titles {
+			job.cancel()
+		}
 		if m.pal != nil && m.pal.cancel != nil {
 			m.pal.cancel()
 		}
@@ -274,8 +277,9 @@ type model struct {
 	lineBuf        []string            // transcript lines, reused between refreshes
 	conv           *session.Session    // current conversation on disk; nil until the first turn
 	persistence    *contextPersistence // owned by the current run's worker
-	hist           *history            // prompt history for this directory
-	shellNotes     []shellNote         // !cmd results waiting to ride along with the next prompt
+	titles         map[string]*titleJob
+	hist           *history    // prompt history for this directory
+	shellNotes     []shellNote // !cmd results waiting to ride along with the next prompt
 	shellSeq       int
 	welcome        *block // banner block; the transcript is reset to it by /new
 	start          welcomeScreen
@@ -525,7 +529,12 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 		if !errors.Is(msg.err, context.Canceled) {
 			bell = m.notificationBell()
 		}
-		return m, tea.Batch(m.finishPromptAction(), bell)
+		m.finishPendingTitle()
+		var title tea.Cmd
+		if msg.err == nil {
+			title = m.automaticTitle()
+		}
+		return m, tea.Batch(m.finishPromptAction(), bell, title)
 	case compactDoneMsg:
 		return m, m.compactDone(msg)
 	case sessionTitleMsg:
@@ -917,6 +926,9 @@ func (m *model) submitAt(text string, files []fantasy.FilePart, sentAt time.Time
 		send = "(see the attached image)"
 	}
 	msg := fantasy.NewUserMessage(send, files...)
+	if m.conv.Title == "" {
+		m.conv.Title = session.TitleFor([]fantasy.Message{msg})
+	}
 	b := userBlock(text, attachmentNames(files))
 	b.prompt = m.conv.Checkpoint(m.sess.Agent.Messages(), text, msg, m.sess.Name)
 	m.blocks = append(m.blocks, b)

@@ -139,6 +139,7 @@ func (m *model) compactDone(msg compactDoneMsg) tea.Cmd {
 	case msg.err != nil:
 		m.appendSystem("compaction failed; original context preserved: " + msg.err.Error())
 	}
+	m.finishPendingTitle()
 	m.refresh()
 	return m.finishPromptAction()
 }

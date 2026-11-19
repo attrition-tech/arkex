@@ -383,6 +383,14 @@ Use `/model` to switch models, `/resume` for saved sessions, `/new` for a fresh
 conversation, and `/help` for commands. Press Esc twice to stop a run or Ctrl+C
 twice to exit when idle. Model output is untrusted: review changes before shipping.
 
+New interactive sessions are named automatically after their first successful
+exchange. Arkex immediately shows a local title, then sends a bounded text excerpt
+to the same connected model in a separate, tool-free request. Naming usage is
+included in the token totals, but not the context gauge. If naming fails, the local
+title stays; it is not retried on every turn. Existing sessions and manual names
+are preserved. Use `/rename` or **Generate title with AI** in `/sessions` to change
+a title later; explicit AI regeneration still offers an editable preview.
+
 To edit a sent prompt, select it with Tab/Shift+Tab from an empty input and press
 Enter, or click the prompt. Edit and confirm to resend in a new conversation
 branch; the original stays in `/resume`. Esc cancels editing. File changes are

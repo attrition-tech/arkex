@@ -202,7 +202,7 @@ func TestPaletteClicks(t *testing.T) {
 	if g.w == 0 || len(g.rows) == 0 {
 		t.Fatalf("geometry not recorded: %+v", g)
 	}
-	// First row is the "Suggested" header; the second is an item.
+	// First row is the "Session" header; the second is an item.
 	if g.rows[0] != -1 || g.rows[1] < 0 {
 		t.Fatalf("rows = %v", g.rows)
 	}

@@ -134,6 +134,102 @@ func TestCopyCodeSource(t *testing.T) {
 	}
 }
 
+func TestContextualCopyUsesSourceAcrossWrappingAndStreaming(t *testing.T) {
+	const source = "    leading code\n    Copy code 1\n    Reply actions\n\n## Reply\n\n```go\nfmt.Println(\"日本語, not terminal wrapping\")\n```\n\n> - Quoted code:\n>\n>   ~~~text\n>     alpha & beta\n>   ~~~\n\n    indented third\n\n```text\npartial"
+	want := []string{"leading code\nCopy code 1\nReply actions\n", "fmt.Println(\"日本語, not terminal wrapping\")\n", "  alpha & beta\n", "indented third\n", "partial"}
+	for _, width := range []int{24, 45, 100} {
+		for _, streaming := range []bool{false, true} {
+			t.Run(fmt.Sprintf("width%d/streaming%v", width, streaming), func(t *testing.T) {
+				m, _ := testModel(t)
+				m.width, m.height, m.running = width, 60, streaming
+				b := newBlock(blockAssistant, source)
+				m.blocks = []*block{b}
+				if streaming {
+					m.Update(m.streamMarkdown()())
+					// Later bytes must not change the copy target of an already
+					// displayed immutable streaming snapshot.
+					b.text.WriteString(" trailing delta")
+				}
+				m.layout()
+				if strings.Contains(strings.Join(m.lineBuf, "\n"), codeActionMarker) || len(b.codeActions) != len(want) {
+					t.Fatalf("markers leaked or code controls missing: %+v\n%s", b.codeActions, transcript(m))
+				}
+				for i, action := range b.codeActions {
+					line := m.lineBuf[action.row]
+					if got := ansi.Strip(ansi.Cut(line, action.x0+2, action.x1+2)); got != fmt.Sprintf("Copy code %d", i+1) {
+						t.Fatalf("control and hit map disagree: %q", got)
+					}
+					x, y := action.x0+3, action.row-m.vp.YOffset()
+					m.handleMouse(tea.MouseClickMsg{X: x, Y: y, Button: tea.MouseLeft})
+					_, cmd := m.handleMouse(tea.MouseReleaseMsg{X: x, Y: y, Button: tea.MouseLeft})
+					if got := copiedText(t, cmd); got != want[i] {
+						t.Fatalf("code %d copied %q; want %q", i+1, got, want[i])
+					}
+					m.flashText = ""
+				}
+				m.selectPress(2, 0)
+				m.selectDrag(width-1, len(m.lineBuf)-1)
+				m.selectRelease()
+				_, selectionCmd := m.Update(copySelectionMsg{gen: m.sel.gen})
+				selected := copiedText(t, selectionCmd)
+				// These phrases occur once in source; only the UI controls are omitted.
+				if strings.Count(selected, "Copy code") != 1 || strings.Count(selected, "Reply actions") != 1 || !strings.Contains(selected, "leading code") || !strings.Contains(selected, "partial") {
+					t.Fatalf("selection copied controls or lost reply content: %q", selected)
+				}
+				m.clearSelection()
+				m.running = false
+				m.refresh()
+				typeKeys(m, "tab", "enter")
+				if m.pal == nil || m.pal.level().title != "Reply actions" {
+					t.Fatal("keyboard cannot reach reply actions")
+				}
+				typeKeys(m, "esc")
+				if m.pal != nil || m.promptFocus != b {
+					t.Fatal("closing local actions lost message focus")
+				}
+				typeKeys(m, "enter")
+				_, cmd := m.handleKey(key("enter"))
+				if got := copiedText(t, cmd); got != b.text.String() {
+					t.Fatalf("reply source changed: %q", got)
+				}
+				typeKeys(m, "esc", "x")
+				if m.input.Value() != "x" || m.promptFocus != nil {
+					t.Fatal("composer focus was not restored")
+				}
+			})
+		}
+	}
+}
+
+// Read the terminal clipboard effect, stopping before the optional system
+// clipboard helper. No terminal output or host clipboard writes are performed.
+func copiedText(t *testing.T, cmd tea.Cmd) string {
+	t.Helper()
+	var find func(tea.Cmd) (string, bool)
+	find = func(cmd tea.Cmd) (string, bool) {
+		if cmd == nil {
+			return "", false
+		}
+		msg := cmd()
+		if reflect.TypeOf(msg) == reflect.TypeOf(tea.SetClipboard("")()) {
+			return fmt.Sprint(msg), true
+		}
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, child := range batch {
+				if value, found := find(child); found {
+					return value, true
+				}
+			}
+		}
+		return "", false
+	}
+	value, ok := find(cmd)
+	if !ok {
+		t.Fatal("no clipboard effect")
+	}
+	return value
+}
+
 func TestCopyPaletteRetainsSelection(t *testing.T) {
 	m, _ := testModel(t)
 	m.setInput("alpha beta")

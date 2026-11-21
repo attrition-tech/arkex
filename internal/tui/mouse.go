@@ -29,6 +29,19 @@ func (m *model) spanAt(line int) (span, bool) {
 	return span{}, false
 }
 
+func (s span) codeActionAt(x, line int) int {
+	x -= 2 // block margin
+	if s.work != nil {
+		x -= 2
+	}
+	for i, a := range s.b.codeActions {
+		if line-s.top == a.row && x >= a.x0 && x < a.x1 {
+			return i + 1
+		}
+	}
+	return 0
+}
+
 // handleMouse routes wheel, motion and left-click events. Mouse reporting
 // is on while m.mouse is set (View sets MouseModeAllMotion); /mouse turns
 // it off so terminals that need it for native text selection get it back.
@@ -103,14 +116,23 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		clicked, cmd := m.selectRelease()
-		if clicked {
-			if s, ok := m.spanAt(m.vp.YOffset() + mo.Y); ok && !s.workHeader && s.b.kind == blockUser && s.b.prompt != 0 {
-				index := s.b.prompt
-				return m, m.openPaletteSub("Sent prompt", []paletteItem{
-					{title: "Edit and resend…", action: func(m *model) tea.Cmd { return m.requestPromptEdit(index) }},
-					{title: "Remove from here…", action: func(m *model) tea.Cmd { return m.confirmPromptRemove(index) }},
-					{title: "Close", action: func(m *model) tea.Cmd { return m.closePalette() }},
-				})
+		if clicked && mo.Y < m.vp.Height() {
+			if s, ok := m.spanAt(m.vp.YOffset() + mo.Y); ok && !s.workHeader {
+				if s.b.kind == blockUser {
+					return m, m.messageActions(s.b)
+				}
+				if s.b.kind == blockAssistant {
+					if i := s.codeActionAt(mo.X, m.vp.YOffset()+mo.Y); i > 0 {
+						return m, m.copyText(s.b.codeActions[i-1].text)
+					}
+					row, x := m.vp.YOffset()+mo.Y-s.top, mo.X-2
+					if s.work != nil {
+						x -= 2
+					}
+					if row == s.bottom-s.top-1 && x >= 0 && x < len("Reply actions") {
+						return m, m.messageActions(s.b)
+					}
+				}
 			}
 			m.transcriptClick(m.vp.YOffset() + mo.Y)
 		}
@@ -276,6 +298,7 @@ func (m *model) paletteClick(x, y int) tea.Cmd {
 // costs one re-render at each edge, not one per cell.
 func (m *model) hoverAt(x, y int) {
 	act := actNone
+	code := 0
 	m.hoverChip = 0
 	var hb *block
 	var hg *block
@@ -303,14 +326,18 @@ func (m *model) hoverAt(x, y int) {
 				hw = s.work
 			} else if s.header {
 				hg = s.group
-			} else if s.b.kind == blockTool || s.b.kind == blockReasoning {
+			} else if s.b.kind == blockTool || s.b.kind == blockReasoning || s.b.kind == blockAssistant {
 				hb = s.b
+				if s.b.kind == blockAssistant {
+					code = s.codeActionAt(x, line)
+				}
 			}
 		}
 	}
 	m.hoverAct = act // footer re-renders through its cache key
-	if hb != m.hoverBlock || hg != m.hoverGroup || hw != m.hoverWork {
+	if hb != m.hoverBlock || hg != m.hoverGroup || hw != m.hoverWork || code != m.hoverCode {
 		m.hoverBlock = hb
+		m.hoverCode = code
 		m.hoverGroup = hg
 		m.hoverWork = hw
 		m.refresh()

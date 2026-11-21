@@ -16,6 +16,7 @@ type streamMarkdownMsg struct {
 	run, gen int
 	width, n int
 	lines    []string
+	actions  []codeAction
 	duration time.Duration
 }
 
@@ -33,17 +34,18 @@ func (m *model) streamMarkdown() tea.Cmd {
 	}
 	m.markdownBusy = true
 	msg := streamMarkdownMsg{b: b, run: m.runGen, gen: themeGen, width: width, n: b.text.Len()}
-	text := strings.TrimSpace(b.text.String())
+	text := b.text.String()
 	style, fallback, border := theme.Markdown, textStyle, theme.Muted
 	return func() tea.Msg {
 		started := time.Now()
 		r := newMarkdownRenderer(style, width, border)
-		out, err := r.Render(text)
+		out, actions, err := r.Render(text)
 		if err != nil {
 			out = fallback.Width(width).Render(text)
 		}
 		if out = tidy(out); out != "" {
 			msg.lines = strings.Split(out, "\n")
+			msg.actions = actions
 		}
 		msg.duration = time.Since(started)
 		return msg

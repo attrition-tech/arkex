@@ -144,18 +144,19 @@ func TestQuitCommandsConfirmStay(t *testing.T) {
 	}
 }
 
-func TestTabPromptFocus(t *testing.T) {
+func TestTabMessageFocus(t *testing.T) {
 	m, _ := testModel(t)
 	first, last := newBlock(blockUser, "first\nsecond line"), newBlock(blockUser, "newest")
-	m.blocks = []*block{first, newBlock(blockAssistant, strings.Repeat("reply\n", 60)), last}
+	reply := newBlock(blockAssistant, strings.Repeat("reply\n", 60))
+	m.blocks = []*block{first, reply, last}
 	m.hist = &history{entries: []string{"unrelated persisted history"}, idx: 1}
 	m.layout()
 	for _, step := range []struct {
 		key  string
 		want *block
 	}{
-		{"tab", last}, {"tab", first}, {"tab", first},
-		{"shift+tab", last}, {"shift+tab", nil}, {"shift+tab", nil},
+		{"tab", last}, {"tab", reply}, {"tab", first}, {"tab", first},
+		{"shift+tab", reply}, {"shift+tab", last}, {"shift+tab", nil}, {"shift+tab", nil},
 	} {
 		typeKeys(m, step.key)
 		if m.input.Value() != "" || m.promptFocus != step.want {
@@ -164,7 +165,7 @@ func TestTabPromptFocus(t *testing.T) {
 		if first.key.hover != (step.want == first) || last.key.hover != (step.want == last) {
 			t.Fatal("must highlight exactly one prompt")
 		}
-		if step.want != nil {
+		if step.want != nil && step.want.kind == blockUser {
 			for _, row := range step.want.lines {
 				if ansi.StringWidth(row) != m.width-1 || !strings.Contains(ansi.Cut(row, m.width-5, m.width-2), "\x1b[48;") {
 					t.Fatal("highlight must include padding near the right margin")
@@ -173,6 +174,9 @@ func TestTabPromptFocus(t *testing.T) {
 		}
 		if step.want == first && m.vp.YOffset() != 0 {
 			t.Fatal("older prompt not scrolled into view")
+		}
+		if step.want == reply && !strings.Contains(transcript(m), "Reply actions · enter") {
+			t.Fatal("focused reply actions must be visible, even for a long reply")
 		}
 	}
 	typeKeys(m, "tab", "x")

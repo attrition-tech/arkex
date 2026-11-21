@@ -240,6 +240,7 @@ func TestSlashCommandsHelpNewAndCompact(t *testing.T) {
 	m.refresh()
 
 	m.command("/help")
+	m.vp.ScrollUp(m.vp.YOffset())
 	if !strings.Contains(transcript(m), "/models") {
 		t.Fatalf("help missing:\n%s", transcript(m))
 	}

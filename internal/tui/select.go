@@ -101,7 +101,7 @@ func (m *model) clearSelection() {
 }
 
 // selectedText extracts the highlighted text from the wrapped transcript
-// lines, without styling and without trailing spaces.
+// lines, without styling, action controls or trailing spaces.
 func (m *model) selectedText() string {
 	if m.sel == nil || m.sel.empty() {
 		return ""
@@ -109,6 +109,7 @@ func (m *model) selectedText() string {
 	start, end := m.sel.bounds()
 	lines := m.vp.lines
 	var out []string
+nextLine:
 	for i := start.line; i <= end.line && i < len(lines); i++ {
 		if i < 0 {
 			continue
@@ -119,6 +120,16 @@ func (m *model) selectedText() string {
 			if i >= span.top && i < span.bottom {
 				if span.b.kind == blockUser {
 					left = 1
+				}
+				if span.b.kind == blockAssistant && !span.workHeader {
+					if i == span.bottom-1 { // Reply actions
+						continue nextLine
+					}
+					for _, action := range span.b.codeActions {
+						if i-span.top == action.row {
+							continue nextLine
+						}
+					}
 				}
 				break
 			}

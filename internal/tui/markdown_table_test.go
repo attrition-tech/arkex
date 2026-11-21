@@ -14,7 +14,7 @@ func TestMarkdownDocumentColourDoesNotStyleDiscardedPadding(t *testing.T) {
 	styles := glamouransi.StyleConfig{}
 	styles.Document.Color = &red
 	r := &tableMarkdownRenderer{styles: styles, width: 80}
-	out, err := r.Render("plain **strong** text")
+	out, _, err := r.Render("plain **strong** text")
 	if err != nil {
 		t.Fatal(err)
 	}

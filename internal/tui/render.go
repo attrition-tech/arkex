@@ -45,12 +45,14 @@ var (
 // markdown renders completed assistant text with Glamour. One renderer is
 // kept per width; blocks cache their rendered output.
 type markdown struct {
-	width int
-	gen   int // themeGen the renderer was built for
-	r     *tableMarkdownRenderer
+	width   int
+	gen     int // themeGen the renderer was built for
+	r       *tableMarkdownRenderer
+	actions []codeAction
 }
 
 func (md *markdown) render(text string, width int) string {
+	md.actions = nil
 	if width < 10 {
 		return textStyle.Render(text)
 	}
@@ -58,11 +60,12 @@ func (md *markdown) render(text string, width int) string {
 		r := newMarkdownRenderer(theme.Markdown, width, theme.Muted)
 		md.r, md.width, md.gen = r, width, themeGen
 	}
-	out, err := md.r.Render(text)
+	out, actions, err := md.r.Render(text)
 	if err != nil {
 		return textStyle.Width(width).Render(text)
 	}
-	return tidy(out)
+	md.actions = actions
+	return out
 }
 
 func newMarkdownRenderer(st glamouransi.StyleConfig, width int, border color.Color) *tableMarkdownRenderer {

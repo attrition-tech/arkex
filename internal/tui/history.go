@@ -139,12 +139,13 @@ func (h *history) next() (string, bool) {
 	return h.entries[h.idx], true
 }
 
-// Tab walks the current transcript's user messages, not persisted input history.
+// Tab walks visible user messages and replies, not persisted input history or
+// assistant progress folded inside a closed Work section.
 func (m *model) focusPrompt(older bool) {
-	start := len(m.blocks)
+	start := len(m.spans)
 	if m.promptFocus != nil {
-		for i, b := range m.blocks {
-			if b == m.promptFocus {
+		for i, s := range m.spans {
+			if s.b == m.promptFocus && !s.workHeader && !s.header {
 				start = i
 				break
 			}
@@ -156,24 +157,31 @@ func (m *model) focusPrompt(older bool) {
 	if older {
 		dir = -1
 	}
-	for i := start + dir; i >= 0 && i <= len(m.blocks); i += dir {
-		if i == len(m.blocks) {
+	for i := start + dir; i >= 0 && i <= len(m.spans); i += dir {
+		if i == len(m.spans) {
 			m.promptFocus = nil
 			m.stickBottom = true
 			m.refresh()
 			return
 		}
-		if m.blocks[i].kind != blockUser {
+		s := m.spans[i]
+		if s.workHeader || s.header || (s.b.kind != blockUser && s.b.kind != blockAssistant) {
 			continue
 		}
-		m.promptFocus = m.blocks[i]
+		m.promptFocus = s.b
 		m.stickBottom = false
 		m.clearSelection()
 		m.refresh()
 		for _, s := range m.spans {
-			if s.b == m.promptFocus {
-				if s.top < m.vp.YOffset() || s.bottom > m.vp.YOffset()+m.vp.Height() {
-					m.vp.ScrollDown(s.top - m.vp.YOffset())
+			if s.b == m.promptFocus && !s.workHeader {
+				row := s.top
+				if s.b.kind == blockAssistant {
+					row = s.bottom - 1
+				}
+				if row < m.vp.YOffset() {
+					m.vp.ScrollDown(row - m.vp.YOffset())
+				} else if row >= m.vp.YOffset()+m.vp.Height() {
+					m.vp.ScrollDown(row - m.vp.YOffset() - m.vp.Height() + 1)
 				}
 				break
 			}

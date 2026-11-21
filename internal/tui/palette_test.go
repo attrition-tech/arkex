@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func key(s string) tea.KeyPressMsg {
@@ -90,7 +91,7 @@ func TestPaletteOpensOnSlashOnlyWhenEmpty(t *testing.T) {
 	if m.pal == nil || m.input.Value() != "" {
 		t.Fatalf("slash on empty input must open the palette without inserting it")
 	}
-	if m.pal.level().title != "Commands" || len(m.pal.view) < 8 {
+	if m.pal.level().title != "Commands" || len(m.pal.view) != 7 {
 		t.Fatalf("top level = %q with %d rows", m.pal.level().title, len(m.pal.view))
 	}
 	typeKeys(m, "esc")
@@ -125,7 +126,7 @@ func TestPaletteFilterAndRun(t *testing.T) {
 		t.Fatal("search text must reset when entering a sub-list")
 	}
 	typeKeys(m, "esc")
-	if m.pal == nil || len(m.pal.levels) != 1 {
+	if m.pal == nil || len(m.pal.levels) != 1 || m.pal.input.Value() != "switch model" {
 		t.Fatal("esc in a sub-list must go back, not close")
 	}
 
@@ -153,7 +154,7 @@ func TestPaletteRendersCentered(t *testing.T) {
 	if box == "" || x < 10 || y < 1 || cur == nil {
 		t.Fatalf("box empty or not centered: x=%d y=%d cursor=%v", x, y, cur)
 	}
-	if !strings.Contains(box, "Commands") || !strings.Contains(box, "Suggested") || strings.Contains(box, "/mode") {
+	if !strings.Contains(box, "Commands") || !strings.Contains(box, "Session") || strings.Contains(box, "Suggested") || !strings.Contains(box, "esc close") {
 		t.Fatalf("box missing title, group or hint:\n%s", box)
 	}
 	out := overlay(strings.Repeat(strings.Repeat("x", 100)+"\n", 29)+strings.Repeat("x", 100), box, x, y)
@@ -163,5 +164,82 @@ func TestPaletteRendersCentered(t *testing.T) {
 	}
 	if !strings.HasPrefix(lines[y], strings.Repeat("x", x)) || !strings.Contains(lines[y+1], "Commands") {
 		t.Fatalf("box not placed at %d,%d:\n%s", x, y, out)
+	}
+	// Empty search results must not wrap past a short terminal's bottom edge.
+	m.pal.input.SetValue("no-such-command")
+	m.pal.filter()
+	for _, width := range []int{24, 40} {
+		box, x, y, _ := m.paletteBox(width, 8)
+		lines := strings.Split(box, "\n")
+		if box == "" || y+len(lines) > 8 {
+			t.Fatalf("empty palette exceeds %dx8:\n%s", width, box)
+		}
+		for _, line := range lines {
+			if x+ansi.StringWidth(line) > width {
+				t.Fatalf("empty palette exceeds width %d: %q", width, line)
+			}
+		}
+	}
+}
+
+func TestPaletteCatalogAvailabilityAndBackNavigation(t *testing.T) {
+	m, _ := testModel(t)
+	m.setInput("keep this unsent draft")
+	typeKeys(m, "ctrl+p")
+	seen := map[string]bool{}
+	for _, item := range m.pal.level().items {
+		if seen[item.title] {
+			t.Fatalf("duplicate action %q", item.title)
+		}
+		seen[item.title] = true
+	}
+	if seen["Copy selection"] || seen["Copy entire prompt"] {
+		t.Fatal("irrelevant copy actions remain")
+	}
+	for _, command := range commands {
+		m.pal.input.SetValue(command.name)
+		m.pal.filter()
+		if len(m.pal.view) == 0 || !strings.Contains(m.pal.view[0].hint+" "+m.pal.view[0].aliases, command.name) {
+			t.Fatalf("command %s is missing or loses to a fuzzy match: %s", command.name, titles(m.pal.view))
+		}
+	}
+	// Queue is distinct from queuing the draft; exact aliases win.
+	m.pal.input.SetValue("/queue")
+	m.pal.filter()
+	if m.pal.view[0].title != "Pending messages" {
+		t.Fatal("/queue selects the draft action")
+	}
+	// An idle-opened menu must recheck availability after a run starts.
+	m.pal.input.SetValue("/model")
+	m.pal.filter()
+	m.running = true
+	typeKeys(m, "enter")
+	box, _, _, _ := m.paletteBox(100, 30)
+	if len(m.pal.levels) != 1 || !strings.Contains(ansi.Strip(box), "Finish or stop the current run first") {
+		t.Fatal("unavailable action ran or failed to explain why")
+	}
+	m.running = false
+	typeKeys(m, "enter", "esc")
+	if m.pal.input.Value() != "/model" || m.input.Value() != "keep this unsent draft" {
+		t.Fatal("back lost query or draft")
+	}
+	// Restore a nonzero selection too, across a deeper breadcrumb.
+	m.pal.input.SetValue("s")
+	m.pal.filter()
+	for i, item := range m.pal.view {
+		if item.title == "Settings" {
+			m.pal.sel = i
+			break
+		}
+	}
+	sel := m.pal.sel
+	typeKeys(m, "enter")
+	box, _, _, _ = m.paletteBox(100, 30)
+	if !strings.Contains(ansi.Strip(box), "Commands › Settings") {
+		t.Fatal("missing breadcrumb")
+	}
+	typeKeys(m, "esc")
+	if m.pal.sel != sel || m.pal.input.Value() != "s" {
+		t.Fatal("back lost selected result")
 	}
 }

@@ -167,9 +167,10 @@ type block struct {
 	key          renderKey
 	groupSummary toolGroupSummary
 	// Incremental wrap state for the streaming block (see wrapStreaming).
-	wrapDone  int
-	wrapLines []string
-	streamMD  *streamMarkdownMsg
+	wrapDone    int
+	wrapLines   []string
+	streamMD    *streamMarkdownMsg
+	codeActions []codeAction
 }
 
 // renderKey captures everything a block's rendering depends on. Content is
@@ -221,7 +222,8 @@ type model struct {
 	}
 	footerHits []footerHit  // toolbar pill positions from the last render
 	hoverAct   footerAction // toolbar pill under the mouse, actNone when none
-	hoverBlock *block       // tool or reasoning card under the mouse
+	hoverBlock *block       // tool, reasoning card, or reply under the mouse
+	hoverCode  int          // one-based copy control in hoverBlock
 	hoverGroup *block       // group header, identified by its first member
 	hoverWork  *block       // completed-turn Work header
 
@@ -303,7 +305,7 @@ type model struct {
 	confirmKey     string
 	confirmUntil   time.Time
 	confirmFlash   int
-	promptFocus    *block // keyboard-highlighted sent prompt; never copied into input
+	promptFocus    *block // keyboard-highlighted user message or reply; never copied into input
 	editingPrompt  *promptEdit
 	editAfterStop  int
 	removeOnStop   int
@@ -438,7 +440,7 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 
 	case tea.MouseMsg:
 		if _, click := msg.(tea.MouseClickMsg); click {
-			if m.promptFocus != nil {
+			if m.promptFocus != nil && m.pal == nil {
 				m.promptFocus = nil
 				m.refresh()
 			}
@@ -656,13 +658,21 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 }
 
 func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	if m.pal == nil && m.pending == nil && m.promptFocus != nil && k.String() == "delete" {
-		return m, m.confirmPromptRemove(m.promptFocus.prompt)
+	if m.pal == nil && m.pending == nil && m.promptFocus != nil {
+		switch k.String() {
+		case "enter":
+			return m, m.messageActions(m.promptFocus)
+		case "e":
+			if m.promptFocus.kind == blockUser {
+				return m, m.requestPromptEdit(m.promptFocus.prompt)
+			}
+		case "delete":
+			if m.promptFocus.kind == blockUser {
+				return m, m.confirmPromptRemove(m.promptFocus.prompt)
+			}
+		}
 	}
-	if m.pal == nil && m.pending == nil && m.promptFocus != nil && (k.String() == "e" || k.String() == "enter") {
-		return m, m.requestPromptEdit(m.promptFocus.prompt)
-	}
-	if m.promptFocus != nil && k.String() != "tab" && k.String() != "shift+tab" {
+	if m.pal == nil && m.promptFocus != nil && k.String() != "tab" && k.String() != "shift+tab" && k.String() != "ctrl+p" && k.String() != "super+p" {
 		m.promptFocus = nil
 		m.refresh()
 		if k.String() == "esc" {
@@ -1272,6 +1282,7 @@ func (m *model) replaceTranscript(blocks []*block) {
 	m.promptFocus = nil
 	m.openDetail, m.openGroup, m.openWork = nil, nil, nil
 	m.hoverBlock, m.hoverGroup, m.hoverWork = nil, nil, nil
+	m.hoverCode = 0
 	m.clearSelection()
 	m.historyCache.first, m.historyCache.turn = nil, nil
 	m.historyCache.lines, m.historyCache.spans = nil, nil
@@ -1473,6 +1484,7 @@ func (m *model) renderBlocks(width int) []string {
 					// need not retain rendered tool bodies or streaming snapshots.
 					for _, hidden := range m.blocks[section.start:section.end] {
 						hidden.lines, hidden.wrapLines, hidden.streamMD = nil, nil, nil
+						hidden.codeActions = nil
 						hidden.wrapDone = 0
 					}
 				}
@@ -1555,7 +1567,22 @@ func (m *model) renderBlocks(width int) []string {
 			lines = append(lines, "")
 		}
 		top := len(lines)
-		for _, line := range bl {
+		for row, line := range bl {
+			if b == m.hoverBlock && m.hoverCode > 0 && m.hoverCode <= len(b.codeActions) {
+				a := b.codeActions[m.hoverCode-1]
+				if row == a.row {
+					left, right := a.x0+2, min(a.x1+2, ansi.StringWidth(line))
+					line = ansi.Cut(line, 0, left) + hoverStyle.Underline(true).Render(ansi.Strip(ansi.Cut(line, left, right))) + ansi.Cut(line, right, ansi.StringWidth(line))
+				}
+			}
+			if b.kind == blockAssistant && row == len(bl)-1 && (b == m.promptFocus || b == m.hoverBlock) {
+				label := "Reply actions"
+				if b == m.promptFocus {
+					label += " · enter"
+				}
+				line = "  " + hoverStyle.Render(label)
+				line = ansi.Truncate(line, contentWidth+2, "")
+			}
 			if work != nil {
 				line = "  " + line
 			}
@@ -1667,13 +1694,21 @@ func (m *model) renderBlockLines(b *block, inner int, streaming, grouped bool) (
 	case blockAssistant:
 		if streaming {
 			if b.streamMD == nil || b.streamMD.width != inner || b.streamMD.gen != themeGen {
+				b.codeActions = nil
 				return nil
 			}
-			return b.streamMD.lines
+			b.codeActions = b.streamMD.actions
+			lines = append([]string(nil), b.streamMD.lines...)
+			return append(lines, "", textStyle.Foreground(theme.Tool).Underline(true).Render("Reply actions"))
 		}
 		b.streamMD = nil
 		b.wrapLines = nil
-		out = m.md.render(strings.TrimSpace(b.text.String()), inner)
+		// Leading indentation is Markdown syntax, including indented code.
+		out = m.md.render(b.text.String(), inner)
+		b.codeActions = m.md.actions
+		if out != "" {
+			out += "\n\n" + textStyle.Foreground(theme.Tool).Underline(true).Render("Reply actions")
+		}
 	case blockReasoning:
 		if !key.expanded {
 			label := "Thinking"

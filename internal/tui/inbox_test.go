@@ -140,7 +140,8 @@ func TestSteeringAndQueuePreserveTurnsAndAttachments(t *testing.T) {
 			if err != nil || len(saved.Pending) != 0 || saved.RunPending || len(saved.Prompts) != 5 {
 				t.Fatalf("delivery/checkpoints not committed: %+v %v", saved, err)
 			}
-			if !strings.Contains(transcript(h.model), "Steering applied to context") {
+			// Later queued turns can push the receipt above the viewport.
+			if !strings.Contains(strings.Join(h.renderBlocks(h.width), "\n"), "Steering applied to context") {
 				t.Fatal("applied steering receipt missing")
 			}
 			if withTool {

@@ -88,9 +88,9 @@ func TestEditCancelAndKeyboardMouseEntry(t *testing.T) {
 	h := fakeAgentModel(t, &fakeLM{script: []string{streamText("answer", 20)}}, 100000)
 	sendEditTest(h, "original prompt")
 	h.setInput("")
-	typeKeys(h.model, "tab", "enter")
+	typeKeys(h.model, "tab", "tab", "e")
 	if h.editingPrompt == nil {
-		t.Fatal("tab/enter did not enter editor")
+		t.Fatal("selecting a sent message then e did not enter editor")
 	}
 	typeKeys(h.model, "esc")
 	h.setInput("unsent draft")
@@ -125,7 +125,7 @@ func TestEditCancelAndKeyboardMouseEntry(t *testing.T) {
 		y := s.top - h.vp.YOffset()
 		h.Update(tea.MouseClickMsg{X: 4, Y: y, Button: tea.MouseLeft})
 		h.Update(tea.MouseReleaseMsg{X: 4, Y: y, Button: tea.MouseLeft})
-		if h.pal == nil || h.pal.view[0].title != "Edit and resend…" || h.pal.view[1].title != "Remove from here…" {
+		if h.pal == nil || h.pal.view[0].title != "Copy sent message" || h.pal.view[1].title != "Edit and resend…" || h.pal.view[2].title != "Remove from here…" {
 			t.Fatal("mouse action missing")
 		}
 		return
@@ -273,6 +273,7 @@ func TestRemoveFirstPromptStopsBeforeForkAndPersistsEmptyBranch(t *testing.T) {
 		h := fakeAgentModel(t, &fakeLM{script: []string{streamText("answer", 20)}}, 100000)
 		sendEditTest(h, "first prompt")
 		originalID := h.conv.ID
+		h.focusPrompt(true)
 		h.focusPrompt(true)
 		h.Update(tea.KeyPressMsg{Code: tea.KeyDelete})
 		if h.pal == nil || h.conv.ID != originalID {

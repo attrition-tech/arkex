@@ -58,6 +58,7 @@ type footerKey struct {
 	retry              bool
 	hover              footerAction
 	inbox              string
+	messageFocus       bool
 }
 
 // footerRows is the height of the toolbar plus the status line.
@@ -101,7 +102,8 @@ func (m *model) footer() string {
 		compacting: m.compacting,
 		inputEmpty: m.input.Value() == "" && len(m.attachments) == 0,
 		hover:      m.hoverAct, pending: m.pending != nil,
-		retry: m.pending != nil && m.pending.title != "",
+		retry:        m.pending != nil && m.pending.title != "",
+		messageFocus: m.promptFocus != nil,
 	}
 	if m.conv != nil {
 		key.usageIn += m.conv.TitleUsageIn
@@ -280,6 +282,9 @@ func (m *model) statusLine(key footerKey) string {
 			return " " + hintsStyle.Render(ansi.Truncate("←/→ choose · enter confirm · esc twice cancels · ctrl+c twice stops", m.width-1, "…"))
 		}
 		return " " + hintsStyle.Render(ansi.Truncate(approvalHint(m.width), m.width-1, "…"))
+	}
+	if key.messageFocus {
+		return " " + hintsStyle.Render(ansi.Truncate("enter actions · tab older · shift+tab newer · esc composer", m.width-1, "…"))
 	}
 	var parts []string
 	if key.inbox != "" {

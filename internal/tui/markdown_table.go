@@ -2,6 +2,7 @@ package tui
 
 import (
 	"bytes"
+	"fmt"
 	"html"
 	"image/color"
 
@@ -27,7 +28,7 @@ type tableMarkdownRenderer struct {
 	border color.Color
 }
 
-func (r *tableMarkdownRenderer) Render(input string) (string, error) {
+func (r *tableMarkdownRenderer) Render(input string) (string, []codeAction, error) {
 	// Glamour pads every block to WordWrap using the document style. A styled
 	// padding space is emitted as its own SGR pair, even though tidy removes all
 	// of that right padding. Keep the foreground on actual text instead. This is
@@ -69,10 +70,35 @@ func (r *tableMarkdownRenderer) Render(input string) (string, error) {
 		plain.SetBlankPreviousLines(code.HasBlankPreviousLines())
 		code.Parent().ReplaceChild(code.Parent(), code, plain)
 	}
+	var codes []string
+	var nodes []ast.Node
+	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if entering && (n.Kind() == ast.KindFencedCodeBlock || n.Kind() == ast.KindCodeBlock) {
+			nodes = append(nodes, n)
+			codes = append(codes, codeText(n, source))
+		}
+		return ast.WalkContinue, nil
+	})
+	for i, code := range nodes {
+		if codes[i] == "" {
+			continue
+		}
+		style := lipgloss.NewStyle().Underline(true)
+		if styles.Code.Color != nil {
+			style = style.Foreground(lipgloss.Color(*styles.Code.Color))
+		}
+		label := style.Render(codeActionLabel(i))
+		header := fmt.Sprintf("\n%s%d\a%s", codeActionMarker, i, label)
+		start := len(source)
+		source = append(source, []byte(html.EscapeString(header))...)
+		block := ast.NewTextBlock()
+		block.AppendChild(block, ast.NewTextSegment(text.NewSegment(start, len(source))))
+		code.Parent().InsertBefore(code.Parent(), code, block)
+	}
 	for _, t := range tables {
 		body, err := r.renderTable(t, source, styles)
 		if err != nil {
-			return "", err
+			return "", nil, err
 		}
 		// A TextBlock preserves line breaks without treating the rendered table
 		// as Markdown again. Only our own ANSI output is added to the source.
@@ -82,7 +108,12 @@ func (r *tableMarkdownRenderer) Render(input string) (string, error) {
 		block.AppendChild(block, ast.NewTextSegment(text.NewSegment(start, len(source))))
 		t.Parent().ReplaceChild(t.Parent(), t, block)
 	}
-	return r.renderNode(doc, source, r.width, styles)
+	out, err := r.renderNode(doc, source, r.width, styles)
+	if err != nil {
+		return "", nil, err
+	}
+	out, actions := extractCodeActions(out, codes)
+	return out, actions, nil
 }
 
 func (r *tableMarkdownRenderer) renderNode(node ast.Node, source []byte, width int, styles glamouransi.StyleConfig) (string, error) {

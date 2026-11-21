@@ -167,7 +167,7 @@ func TestEarlierThinkingMouseClickDoesNotEditPrompt(t *testing.T) {
 		t.Fatal("archive clicks changed the draft or interrupted the run")
 	}
 	clickRow(false)
-	if m.pal == nil || m.pal.level().title != "Sent prompt" || m.pal.view[0].title != "Edit and resend…" {
+	if m.pal == nil || m.pal.level().title != "Sent message" || m.pal.view[1].title != "Edit and resend…" {
 		t.Fatal("clicking the actual prompt no longer opens prompt actions")
 	}
 }

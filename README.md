@@ -180,8 +180,22 @@ step; it does not interrupt the current response or cancel running tools.
 separate follow-up turn without conflicting with Ghostty's macOS fullscreen
 shortcut. Forwarded Cmd+Enter remains supported for existing terminal overrides.
 If your terminal cannot distinguish modified Enter keys, use Ctrl+J for a newline
-and **Queue current draft** in the command palette. Tab still completes `@file`
-names and navigates sent prompts when the composer is empty.
+and search for **Queue current draft** in the command palette. Tab still completes
+`@file` names. With an empty composer, Tab selects older messages and replies;
+Shift+Tab selects newer ones, then returns to the composer. Enter opens the
+selected message's actions; `e` edits a selected sent prompt.
+
+The command palette (`/` on an empty composer, or Ctrl+P) starts with common
+actions. Search finds the full catalog, including `/rename`, `/compact`, timing,
+and **Copy draft**. Unavailable actions explain what is needed. Escape goes back
+without losing your search or selection. Settings groups theme, mouse support,
+and reasoning effort.
+
+Click **Copy code** above a code block or **Reply actions** below a reply to copy
+its original source, without terminal wrapping. The same actions are available
+through Tab then Enter; search **Copy reply or code** for older replies. Sent
+messages offer copy, edit/resend, and removal actions. **Copy selection** appears
+only when text is selected; existing selection auto-copy behavior is unchanged.
 
 Pending messages and their attachment contents are saved locally before the
 composer clears. The footer distinguishes **Steering pending** from **Queued**;

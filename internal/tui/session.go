@@ -266,11 +266,6 @@ func blocksFromMessages(msgs []fantasy.Message) []*block {
 	return out
 }
 
-func (m *model) hasSessions() bool {
-	list, err := session.List(m.o.Cwd)
-	return err == nil && len(list) > 0
-}
-
 // sessionItems is the palette sub-list for /resume.
 func sessionItems(m *model) []paletteItem {
 	items := sessionStateItems(m, "")

@@ -116,7 +116,7 @@ func BenchmarkStreamingMarkdownSnapshot(b *testing.B) {
 			b.SetBytes(int64(len(text)))
 			for b.Loop() {
 				r := newMarkdownRenderer(theme.Markdown, 100, theme.Muted)
-				out, err := r.Render(text)
+				out, _, err := r.Render(text)
 				if err != nil {
 					b.Fatal(err)
 				}

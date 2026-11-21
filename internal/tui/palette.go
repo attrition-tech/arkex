@@ -17,20 +17,25 @@ import (
 // paletteItem is one row of the command palette. Commands share the typed
 // slash-command path; local dialogs use action, and sub opens a nested list.
 type paletteItem struct {
-	group     string
-	title     string
-	hint      string // key or command shown right-aligned
-	cmd       string // slash command run on enter
-	sub       func(m *model) []paletteItem
-	action    func(*model) tea.Cmd
-	sessionID string // session row: enter resumes, ctrl+o / Actions manages
-	detail    string // session model and last activity, shown below the title
+	group       string
+	title       string
+	hint        string // key or command shown right-aligned
+	cmd         string // slash command run on enter
+	sub         func(m *model) []paletteItem
+	action      func(*model) tea.Cmd
+	sessionID   string // session row: enter resumes, ctrl+o / Actions manages
+	detail      string // session model and last activity, shown below the title
+	searchOnly  bool   // available by search, without crowding the default list
+	aliases     string
+	unavailable func(*model) string // checked again on activation, not just opening
 }
 
 // paletteLevel is one list in the palette: the top level or a nested one.
 type paletteLevel struct {
 	title string
 	items []paletteItem
+	query string
+	sel   int
 }
 
 // palette is the centered overlay opened with ctrl+p, cmd+p or "/" on an
@@ -55,7 +60,6 @@ type paletteGeom struct {
 
 const (
 	paletteWidth      = 64
-	paletteMinRows    = 4
 	paletteHeaderRows = 3 // title, search, rule
 )
 
@@ -65,7 +69,7 @@ func (m *model) openPalette() tea.Cmd {
 	}
 	ti := textinput.New()
 	ti.Prompt = "  "
-	ti.Placeholder = "Search"
+	ti.Placeholder = "Search all commands…"
 	ti.SetVirtualCursor(false)
 	p := &palette{input: ti}
 	m.pal = p
@@ -91,8 +95,13 @@ func (m *model) closePalette() tea.Cmd {
 }
 
 func (p *palette) push(l paletteLevel) {
+	if len(p.levels) > 0 {
+		parent := &p.levels[len(p.levels)-1]
+		parent.query, parent.sel = p.input.Value(), p.sel
+	}
 	p.levels = append(p.levels, l)
 	p.input.Reset()
+	p.sel = 0
 	p.filter()
 }
 
@@ -102,27 +111,32 @@ func (p *palette) level() paletteLevel { return p.levels[len(p.levels)-1] }
 // registration order (grouped); with text they are ranked by fuzzy score
 // against the title, falling back to group and hint.
 func (p *palette) filter() {
-	q := strings.TrimSpace(p.input.Value())
+	q := strings.TrimPrefix(strings.TrimSpace(p.input.Value()), "/")
 	items := p.level().items
 	if q == "" || p.editing || p.busy {
-		p.view = items
+		p.view = nil
+		for _, it := range items {
+			if !it.searchOnly || p.editing || p.busy {
+				p.view = append(p.view, it)
+			}
+		}
 	} else {
 		type scored struct {
 			it    paletteItem
 			score int
 		}
 		var hits []scored
-		seen := map[string]bool{} // Suggested repeats rows from other groups
 		for _, it := range items {
-			identity := it.title + "\x00" + it.sessionID
-			if seen[identity] {
-				continue
-			}
-			seen[identity] = true
 			s, ok := fuzzyScore(q, it.title)
 			if !ok {
-				s, ok = fuzzyScore(q, it.group+" "+it.title+" "+it.hint+" "+it.detail)
+				s, ok = fuzzyScore(q, it.group+" "+it.title+" "+it.hint+" "+it.aliases+" "+it.detail)
 				s -= 500
+			}
+			for _, alias := range strings.Fields(it.hint + " " + it.aliases) {
+				if strings.EqualFold(q, strings.TrimPrefix(alias, "/")) {
+					s, ok = 10000, true
+					break
+				}
 			}
 			if ok {
 				hits = append(hits, scored{it, s})
@@ -155,8 +169,9 @@ func (m *model) paletteKey(k tea.KeyPressMsg) tea.Cmd {
 		}
 		if len(p.levels) > 1 {
 			p.levels = p.levels[:len(p.levels)-1]
-			p.input.Reset()
-			p.sel = 0
+			parent := p.level()
+			p.input.SetValue(parent.query)
+			p.sel = parent.sel
 			p.filter()
 			return nil
 		}
@@ -205,6 +220,9 @@ func (p *palette) activate(m *model) tea.Cmd {
 		return tea.Batch(cmd, run)
 	}
 	it := p.view[p.sel]
+	if it.unavailable != nil && it.unavailable(m) != "" {
+		return nil
+	}
 	if it.action != nil {
 		return it.action(m)
 	}
@@ -213,7 +231,6 @@ func (p *palette) activate(m *model) tea.Cmd {
 		if len(items) == 0 {
 			items = []paletteItem{{group: it.group, title: "nothing configured", cmd: "/connections", hint: "/connections"}}
 		}
-		p.sel = 0
 		p.push(paletteLevel{title: it.title, items: items})
 		return nil
 	}
@@ -227,55 +244,117 @@ func (p *palette) activate(m *model) tea.Cmd {
 
 // paletteItems builds the top level from the current state.
 func (m *model) paletteItems() []paletteItem {
-	var items []paletteItem
-	if m.sess.Agent == nil {
-		items = append(items, paletteItem{group: "Suggested", title: "Connections", hint: "/connections", cmd: "/connections"})
-	} else {
-		items = append(items, paletteItem{group: "Suggested", title: "Switch model", hint: "/model", sub: modelItems})
-	}
-	items = append(items,
-		paletteItem{group: "Suggested", title: "New conversation", hint: "/clear", cmd: "/clear"},
-	)
-	if m.conv == nil && m.hasSessions() {
-		items = append(items, paletteItem{group: "Suggested", title: "Resume session", hint: "/resume", sub: sessionItems})
-	}
-
-	mouse := "Turn mouse on"
-	if m.mouse {
-		mouse = "Turn mouse off"
+	items := []paletteItem{
+		{group: "Session", title: "New conversation", hint: "/clear", aliases: "/new", cmd: "/clear", unavailable: idleRequired},
+		{group: "Session", title: "Resume session", hint: "/resume", aliases: "/sessions", sub: sessionItems, unavailable: idleRequired},
+		{group: "Session", title: "Pending messages", hint: "/queue", sub: pendingItems},
+		{group: "Model", title: "Switch model", hint: "/model", sub: modelItems, unavailable: idleRequired},
+		{group: "Model", title: "Connections", hint: "/connections", aliases: "/models", cmd: "/connections"},
+		{group: "More", title: "Settings", sub: settingsItems},
+		{group: "More", title: "Help", hint: "/help", cmd: "/help"},
 	}
 	selection := m.input.SelectedText()
 	if selection == "" {
 		selection = m.selectedText()
 	}
+	if selection != "" {
+		item := copyItem("Copy selection", selection)
+		item.group, item.hint = "Selection", "ctrl+shift+c"
+		items = append(items, item)
+	}
 	items = append(items,
-		paletteItem{group: "Copy", title: "Copy selection", hint: "ctrl+shift+c", action: func(m *model) tea.Cmd {
-			return tea.Batch(m.closePalette(), m.copyText(selection))
-		}},
-		paletteItem{group: "Copy", title: "Copy entire prompt", action: func(m *model) tea.Cmd {
+		paletteItem{group: "Copy", title: "Copy draft", searchOnly: true, unavailable: func(m *model) string {
+			if m.input.Value() == "" {
+				return "The composer is empty"
+			}
+			return ""
+		}, action: func(m *model) tea.Cmd {
 			return tea.Batch(m.closePalette(), m.copyText(m.input.Value()))
 		}},
-		paletteItem{group: "Copy", title: "Copy response or code", sub: responseCopyItems},
-		paletteItem{group: "Session", title: "New conversation", hint: "/clear", cmd: "/clear"},
-		paletteItem{group: "Session", title: "Resume session", hint: "/resume", sub: sessionItems},
-		paletteItem{group: "Session", title: "Pending messages", hint: "/queue", sub: pendingItems},
-		paletteItem{group: "Session", title: "Queue current draft", hint: "alt+enter", action: func(m *model) tea.Cmd {
+		paletteItem{group: "Copy", title: "Copy reply or code…", searchOnly: true, sub: replyItems, unavailable: func(m *model) string {
+			for _, b := range m.blocks {
+				if b.kind == blockAssistant && b.text.Len() > 0 {
+					return ""
+				}
+			}
+			return "No assistant replies yet"
+		}},
+		paletteItem{group: "Session", title: "Queue current draft", hint: "alt+enter", searchOnly: true, unavailable: func(m *model) string {
+			if m.editingPrompt != nil {
+				return "Finish editing the sent prompt first"
+			}
+			if strings.TrimSpace(m.input.Value()) == "" && len(m.attachments) == 0 {
+				return "The composer is empty"
+			}
+			if m.sess.Agent == nil {
+				return "Connect a model first"
+			}
+			return ""
+		}, action: func(m *model) tea.Cmd {
 			m.closePalette()
 			return m.enqueueDraft(false)
 		}},
-		paletteItem{group: "Session", title: "Edit sent prompt", hint: "tab · enter", sub: promptEditItems},
-		paletteItem{group: "Session", title: "Remove from prompt…", hint: "tab · delete", sub: promptRemoveItems},
-		paletteItem{group: "Model", title: "Reasoning effort", hint: "/effort", sub: effortItems},
-		paletteItem{group: "Session", title: "Run timing", hint: "/timing", sub: timingItems},
-		paletteItem{group: "Session", title: mouse, hint: "/mouse", cmd: "/mouse"},
-		paletteItem{group: "Session", title: "Change theme", hint: "/theme", sub: themeItems},
-		paletteItem{group: "Session", title: "Help", hint: "/help", cmd: "/help"},
-		paletteItem{group: "Session", title: "Quit", hint: "ctrl+c twice", cmd: "/quit"},
-
-		paletteItem{group: "Models", title: "Switch model", hint: "/model", sub: modelItems},
-		paletteItem{group: "Models", title: "Connections", hint: "/connections", cmd: "/connections"},
+		paletteItem{group: "Session", title: "Edit sent prompt", hint: "tab · e", searchOnly: true, sub: promptEditItems},
+		paletteItem{group: "Session", title: "Remove from prompt…", hint: "tab · delete", searchOnly: true, sub: promptRemoveItems},
+		paletteItem{group: "Session", title: "Rename session", hint: "/rename", cmd: "/rename", searchOnly: true, unavailable: func(m *model) string {
+			if m.conv == nil {
+				return "Start or resume a session first"
+			}
+			return ""
+		}},
+		paletteItem{group: "Session", title: "Compact conversation", hint: "/compact", cmd: "/compact", searchOnly: true, unavailable: func(m *model) string {
+			if reason := idleRequired(m); reason != "" {
+				return reason
+			}
+			if m.sess.Agent == nil || len(m.sess.Agent.Messages()) == 0 {
+				return "No conversation to compact"
+			}
+			return ""
+		}},
+		paletteItem{group: "Session", title: "Continue paused run", hint: "/continue", cmd: "/continue", searchOnly: true, unavailable: func(m *model) string {
+			if reason := idleRequired(m); reason != "" {
+				return reason
+			}
+			if !m.paused {
+				return "No paused run to continue"
+			}
+			return ""
+		}},
+		paletteItem{group: "Session", title: "Run timing", hint: "/timing", sub: timingItems, searchOnly: true},
+		paletteItem{group: "More", title: "Quit", hint: "/quit", aliases: "/exit /q", cmd: "/quit", searchOnly: true},
 	)
+	for _, item := range settingsItems(m) {
+		item.searchOnly = true
+		items = append(items, item)
+	}
 	return items
+}
+
+func idleRequired(m *model) string {
+	if m.running {
+		return "Finish or stop the current run first"
+	}
+	return ""
+}
+
+func settingsItems(m *model) []paletteItem {
+	mouse := "Turn mouse on"
+	if m.mouse {
+		mouse = "Turn mouse off"
+	}
+	return []paletteItem{
+		{group: "Appearance", title: "Change theme", hint: "/theme", sub: themeItems},
+		{group: "Input", title: mouse, hint: "/mouse", cmd: "/mouse"},
+		{group: "Model", title: "Reasoning effort", hint: "/effort", sub: effortItems, unavailable: func(m *model) string {
+			if reason := idleRequired(m); reason != "" {
+				return reason
+			}
+			if m.sess.Agent == nil || m.sess.Agent.Model == nil {
+				return "Connect a model first"
+			}
+			return ""
+		}},
+	}
 }
 
 // modelItems lists enabled provider/model ids from the config.
@@ -330,10 +409,10 @@ func (m *model) paletteBox(width, height int) (box string, x, y int, cursor *tea
 	p := m.pal
 	p.box = paletteGeom{}
 	inner := min(width-4, paletteWidth)
-	if inner < 24 || height < paletteMinRows+5 {
+	if inner < 20 || height < 8 {
 		return "", 0, 0, nil
 	}
-	maxRows := max(paletteMinRows, min(height-6, 16))
+	maxRows := min(height-7, 16)
 	p.input.SetWidth(inner - lipgloss.Width(p.input.Prompt) - 1)
 
 	// Rows: group headers interleaved with items (headers only when the
@@ -344,7 +423,7 @@ func (m *model) paletteBox(width, height int) (box string, x, y int, cursor *tea
 	}
 	var rows []row
 	selRow := 0
-	grouped := strings.TrimSpace(p.input.Value()) == ""
+	grouped := strings.TrimSpace(p.input.Value()) == "" && maxRows > 1
 	prev := ""
 	for i, it := range p.view {
 		if grouped && it.group != prev {
@@ -355,26 +434,42 @@ func (m *model) paletteBox(width, height int) (box string, x, y int, cursor *tea
 			selRow = len(rows)
 		}
 		rows = append(rows, row{text: m.paletteRow(it, inner, i == p.sel), item: i})
-		if it.detail != "" {
+		detail := it.detail
+		if i == p.sel && it.unavailable != nil {
+			if reason := it.unavailable(m); reason != "" {
+				detail = reason
+			}
+		}
+		if detail != "" && maxRows > 1 {
 			style := popupDesc
 			if i == p.sel {
 				style = popupSelDsc
 			}
-			rows = append(rows, row{text: style.Width(inner).Render("  " + ansi.Truncate(it.detail, inner-3, "…")), item: i})
+			rows = append(rows, row{text: style.Width(inner).Render("  " + ansi.Truncate(detail, inner-3, "…")), item: i})
+			if i == p.sel {
+				selRow = len(rows) - 1
+			}
 		}
 	}
 	if len(rows) == 0 {
-		rows = append(rows, row{text: popupDesc.Render("  no match — enter runs it as a command"), item: -1})
+		rows = append(rows, row{text: popupDesc.Render("  " + ansi.Truncate("no match — enter runs it as a command", inner-2, "…")), item: -1})
 	}
 	top := 0
 	if selRow >= maxRows {
 		top = selRow - maxRows + 1
 	}
 	shown := rows[top:min(len(rows), top+maxRows)]
+	if len(shown) > 1 && shown[len(shown)-1].item == -1 {
+		shown = shown[:len(shown)-1]
+	}
 
-	title := p.level().title
-	if len(p.levels) > 1 {
-		title = "‹ " + title
+	var path []string
+	for _, level := range p.levels {
+		path = append(path, level.title)
+	}
+	title := strings.Join(path, " › ")
+	if w := ansi.StringWidth(title); w > inner-6 {
+		title = ansi.TruncateLeft(title, w-(inner-7), "…")
 	}
 	esc := popupDesc.Render("esc")
 	head := " " + paletteTitle.Render(ansi.Truncate(title, inner-6, "…"))
@@ -385,9 +480,22 @@ func (m *model) paletteBox(width, height int) (box string, x, y int, cursor *tea
 	for _, r := range shown {
 		lines = append(lines, r.text)
 	}
-	if rest := len(rows) - top - len(shown); rest > 0 {
-		lines = append(lines, popupDesc.Render(fmt.Sprintf("  … %d more", rest)))
+	foot := "↑↓ move · enter choose · esc close"
+	if len(p.levels) > 1 {
+		foot = "↑↓ move · enter choose · esc back"
 	}
+	if inner < 40 {
+		foot = "↑↓ · enter · esc"
+	}
+	if len(p.view) > 0 {
+		foot += fmt.Sprintf(" · %d/%d", p.sel+1, len(p.view))
+		if maxRows == 1 && p.view[p.sel].unavailable != nil {
+			if reason := p.view[p.sel].unavailable(m); reason != "" {
+				foot = reason
+			}
+		}
+	}
+	lines = append(lines, paletteRule.Render(strings.Repeat("─", inner)), popupDesc.Render(" "+ansi.Truncate(foot, inner-2, "…")))
 	box = paletteBorder.Width(inner + 2).Render(strings.Join(lines, "\n")) // Width includes the border
 	x = (width - inner - 2) / 2
 	y = max(0, (height-lipgloss.Height(box))/2)
@@ -404,6 +512,7 @@ func (m *model) paletteBox(width, height int) (box string, x, y int, cursor *tea
 }
 
 func (m *model) paletteRow(it paletteItem, inner int, selected bool) string {
+	unavailable := it.unavailable != nil && it.unavailable(m) != ""
 	hint := ansi.Truncate(it.hint, max(0, inner/2-2), "…")
 	if it.sessionID != "" {
 		hint = ansi.Truncate(it.hint, max(0, inner/2-10), "…") + " Actions"
@@ -412,9 +521,15 @@ func (m *model) paletteRow(it paletteItem, inner int, selected bool) string {
 	title := ansi.Truncate(it.title, max(8, titleW), "…")
 	gap := max(1, inner-2-lipgloss.Width(title)-lipgloss.Width(hint))
 	if selected {
-		return popupSel.Render(" "+title) + popupSelDsc.Render(strings.Repeat(" ", gap)+hint+" ")
+		// Some terminals map bold ANSI black to gray, losing contrast on the
+		// selected background. The background already indicates selection.
+		return popupSel.Bold(false).Render("  "+title) + popupSelDsc.Render(strings.Repeat(" ", gap-1)+hint+" ")
 	}
-	return "  " + textStyle.Render(title) + strings.Repeat(" ", gap-1) + popupDesc.Render(hint) + " "
+	style := textStyle
+	if unavailable {
+		style = popupDesc
+	}
+	return "  " + style.Render(title) + strings.Repeat(" ", gap-1) + popupDesc.Render(hint) + " "
 }
 
 // muteBackdrop removes competing highlights without changing layout. Terminal

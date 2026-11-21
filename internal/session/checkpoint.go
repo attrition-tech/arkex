@@ -30,7 +30,8 @@ func (s *Session) syncContext(msgs []fantasy.Message) {
 	}
 }
 
-// Checkpoint must run while the agent is idle, before appending its user message.
+// Checkpoint runs on the history owner before appending a user message.
+// Callers serialize it with other writes to this session.
 func (s *Session) Checkpoint(before []fantasy.Message, text string, prompt fantasy.Message, model string) int {
 	s.syncContext(before)
 	s.Prompts = append(s.Prompts, PromptCheckpoint{Text: text, Prompt: prompt,

@@ -28,11 +28,12 @@ import (
 // fakeLM is an OpenAI-compatible chat endpoint answering from a script, one
 // response per request, recording every request body.
 type fakeLM struct {
-	mu            sync.Mutex
-	requests      []map[string]any
-	script        []string // raw SSE bodies or JSON completions
-	titleRequests []map[string]any
-	titles        []string // naming is independent of the scripted agent steps
+	mu             sync.Mutex
+	requests       []map[string]any
+	script         []string // raw SSE bodies or JSON completions
+	titleRequests  []map[string]any
+	titles         []string // naming is independent of the scripted agent steps
+	beforeResponse func(context.Context, int)
 }
 
 func (f *fakeLM) handler(w http.ResponseWriter, r *http.Request) {
@@ -59,7 +60,11 @@ func (f *fakeLM) handler(w http.ResponseWriter, r *http.Request) {
 			resp = f.script[idx]
 		}
 	}
+	index := len(f.requests)
 	f.mu.Unlock()
+	if !titleRequest && f.beforeResponse != nil {
+		f.beforeResponse(r.Context(), index)
+	}
 	if resp == "" {
 		http.Error(w, "no scripted response", http.StatusInternalServerError)
 		return

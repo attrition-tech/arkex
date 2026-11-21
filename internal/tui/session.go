@@ -170,7 +170,12 @@ func (m *model) loadConversation(s *session.Session) {
 	}
 	m.sess.Agent.SetMessages(messages)
 	m.replaceTranscript(append([]*block{m.welcome}, blocksFromMessages(s.Messages)...))
-	m.paused = false
+	m.paused = s.RunPending && len(messages) > 0
+	// Restart never resumes external effects or dispatches pending work.
+	s.QueuePaused = len(s.Pending) > 0
+	for i := range s.Pending {
+		s.Pending[i].Steer = false
+	}
 	m.usageIn, m.usageOut, m.lastInput = s.UsageIn, s.UsageOut, s.LastInput
 	if s.Model != m.sess.Name {
 		m.lastInput = 0
@@ -179,6 +184,12 @@ func (m *model) loadConversation(s *session.Session) {
 	m.conv = s
 	m.bindPromptCheckpoints()
 	note := fmt.Sprintf("resumed %q · %d messages · %s", s.Title, len(s.Messages), session.Age(s.Updated, time.Now()))
+	if len(s.Pending) > 0 {
+		m.appendSystem(fmt.Sprintf("%d pending messages restored paused — /queue to review and resume", len(s.Pending)))
+	}
+	if s.RunPending {
+		m.appendSystem("Previous work may be incomplete. Review the transcript before /continue; external effects are not replay-safe.")
+	}
 	if s.Model != "" && s.Model != m.sess.Name {
 		note += "\nreplacement model: " + m.sess.Name
 	}

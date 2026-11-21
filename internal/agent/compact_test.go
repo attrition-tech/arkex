@@ -640,3 +640,43 @@ func TestCompactLargeToolEvidenceRemainsRetrievable(t *testing.T) {
 		t.Fatal("excerpting made original evidence inaccessible", err)
 	}
 }
+
+func TestSteeringRemainsVerbatimAcrossCompaction(t *testing.T) {
+	a, lm, _ := compactAgent(t, 8192)
+	// Too large for the ordinary recent-history allowance, but small enough
+	// to fit verbatim in the next request with a compacted handoff.
+	fresh := "NEW_CONSTRAINT_928: " + strings.Repeat("do not publish; ", 500)
+	var pending []fantasy.Message
+	a.NextInput = func(_ context.Context, _ []fantasy.Message, _ bool) ([]fantasy.Message, error) {
+		out := pending
+		pending = nil
+		return out, nil
+	}
+	summarized, continued := false, false
+	lm.respond = func(_ context.Context, call fantasy.Call, n int) (fantasy.StreamResponse, error) {
+		if n == 1 {
+			return summaryResponse(strings.Repeat("older response details ", 2000), fantasy.FinishReasonStop), nil
+		}
+		if len(call.Prompt) > 0 && call.Prompt[0].Role == fantasy.MessageRoleSystem {
+			summarized = true
+			wire, _ := json.Marshal(call.Prompt)
+			if strings.Contains(string(wire), "NEW_CONSTRAINT_928") {
+				t.Fatal("fresh steering was sent to the summarizer instead of preserved")
+			}
+			return summaryResponse("Older response summarized.", fantasy.FinishReasonStop), nil
+		}
+		continued = true
+		if got := session.UserText(call.Prompt[len(call.Prompt)-1]); got != fresh {
+			t.Fatal("fresh steering was changed or lost from the next request")
+		}
+		return summaryResponse("Following the new constraint.", fantasy.FinishReasonStop), nil
+	}
+	err := a.Run(t.Context(), "Start the task", func(e Event) {
+		if end, ok := e.(TurnEnd); ok && end.Step == 1 {
+			pending = []fantasy.Message{fantasy.NewUserMessage(fresh)}
+		}
+	})
+	if err != nil || !summarized || !continued {
+		t.Fatalf("err=%v summarized=%v continued=%v", err, summarized, continued)
+	}
+}

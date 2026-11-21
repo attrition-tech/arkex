@@ -48,8 +48,21 @@ type Session struct {
 	ContextStart  int                `json:"context_start,omitempty"`
 	Prompts       []PromptCheckpoint `json:"prompts,omitempty"`
 	ParentID      string             `json:"parent_id,omitempty"`
+	Pending       []PendingInput     `json:"pending,omitempty"`
+	QueuePaused   bool               `json:"queue_paused,omitempty"`
+	RunPending    bool               `json:"run_pending,omitempty"` // recorded work may not have completed
 	savedHash     [sha256.Size]byte  // optimistic concurrency token; never serialized
 	saved         bool
+}
+
+// PendingInput snapshots the prepared prompt, including attachment bytes. It
+// becomes history only when its removal and checkpoint are saved together.
+type PendingInput struct {
+	ID      string          `json:"id"`
+	Text    string          `json:"text"`
+	Message fantasy.Message `json:"message"`
+	Model   string          `json:"model"`
+	Steer   bool            `json:"steer,omitempty"`
 }
 
 // Summary is what listings need: everything but the messages.
@@ -231,7 +244,7 @@ func (s *Session) Save() error {
 // SaveWithContext observes cancellation while preparing and waiting for a
 // writer. Once the atomic replacement commits, it acknowledges that commit.
 func (s *Session) SaveWithContext(ctx context.Context) error {
-	if len(s.Messages) == 0 && s.ParentID == "" {
+	if len(s.Messages) == 0 && len(s.Pending) == 0 && s.ParentID == "" && !s.saved {
 		return nil
 	}
 	dir, err := Dir(s.Cwd)

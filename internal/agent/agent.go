@@ -30,6 +30,11 @@ type Agent struct {
 	// Retry asks after automatic recovery stops. Completed tools stay intact.
 	// Nil returns the error (noninteractive consumers never wait for input).
 	Retry func(context.Context, error, bool) bool
+	// NextInput is called only on the history-owning worker, at safe step
+	// boundaries. It must durably record returned messages before returning.
+	// When completing is true, an empty result closes admission atomically
+	// with the caller's inbox, so a late input can become a follow-up instead.
+	NextInput func(ctx context.Context, history []fantasy.Message, completing bool) ([]fantasy.Message, error)
 	// MaxSteps, when > 0, caps model↔tool round trips; connection probes
 	// use 1. Zero (the default) means unbounded: a run ends when the model
 	// stops calling tools, ctx is cancelled, or the model looks stuck (see
@@ -115,12 +120,28 @@ func (a *Agent) loop(ctx context.Context, emit func(Event), keepOnFirst int) err
 	steps := 0
 	pause := ""
 	recovered := false // an overflow was already compacted away for this step
-	for pause == "" {
-		steps++
-		keep := 0
-		if steps == 1 {
-			keep = keepOnFirst
+	keep := keepOnFirst
+	input := func(completing bool) (int, error) {
+		if err := ctx.Err(); err != nil {
+			return 0, err
 		}
+		if a.NextInput == nil {
+			return 0, nil
+		}
+		messages, err := a.NextInput(ctx, a.messages, completing)
+		if err == nil {
+			a.messages = append(a.messages, messages...)
+		}
+		return len(messages), err
+	}
+	for pause == "" {
+		n, err := input(false)
+		if err != nil {
+			runErr = err
+			break
+		}
+		keep += n
+		steps++
 		if a.needsCompact() {
 			w := a.ContextWindow()
 			reason := fmt.Sprintf("the upcoming request needs approximately %d input tokens plus output headroom in the %s-token context window", a.projectedInput(), formatTokens(w))
@@ -130,6 +151,18 @@ func (a *Agent) loop(ctx context.Context, emit func(Event), keepOnFirst int) err
 				emit(CompactFailed{Err: err})
 				runErr = fmt.Errorf("compaction stopped; original context preserved: %w", err)
 				break
+			}
+			// Steering admitted during compaction belongs in the upcoming
+			// request, not after another full model/tool step.
+			n, err := input(false)
+			if err != nil {
+				runErr = err
+				break
+			}
+			keep += n
+			if n > 0 && a.needsCompact() {
+				steps--
+				continue
 			}
 		}
 		emit(TurnStart{Step: steps})
@@ -156,6 +189,7 @@ func (a *Agent) loop(ctx context.Context, emit func(Event), keepOnFirst int) err
 			break
 		}
 		recovered = false
+		keep = 0
 		if input := ContextInput(turn.usage); input > 0 {
 			a.lastInput = input
 		}
@@ -165,6 +199,13 @@ func (a *Agent) loop(ctx context.Context, emit func(Event), keepOnFirst int) err
 		emit(TurnEnd{Step: steps, Usage: turn.usage, FinishReason: turn.finish})
 
 		if len(turn.calls) == 0 {
+			n, err := input(true)
+			if err != nil {
+				runErr = err
+			} else if n > 0 {
+				keep = n
+				continue
+			}
 			break
 		}
 		results, err := a.execute(ctx, turn.calls, emit)

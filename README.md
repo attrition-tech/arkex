@@ -174,6 +174,24 @@ arkex -c                              # resume the latest session here
 arkex -p "explain this project"        # one-shot answer
 ```
 
+While the interactive agent is working, **Enter steers** its next model/tool
+step; it does not interrupt the current response or cancel running tools.
+**Shift+Enter inserts a newline. Cmd+Enter queues** a separate follow-up turn.
+If your terminal does not forward Cmd+Enter, use **Queue current draft** in the
+command palette. Tab still completes `@file` names and navigates sent prompts
+when the composer is empty.
+
+Pending messages and their attachment contents are saved locally before the
+composer clears. The footer distinguishes **Steering pending** from **Queued**;
+the transcript confirms when steering enters context. `/queue` lets you review,
+promote, delete, or restore a pending message to the composer. Queued messages
+run FIFO, one turn at a time, after successful completion. Stop, errors, safety
+pauses and restarting Arkex leave pending work paused for explicit resumption.
+Messages retain their selected model; switch back before resuming if it changed.
+Current permissions apply at execution. A recorded message is not proof that
+the provider received or followed it, and interrupted external effects are not
+automatically replayed.
+
 Plain `-p` output buffers each assistant response until it completes, keeping
 abandoned attempts out of stdout; retry and recovery notices go to stderr.
 Use `--json` with `-p` for live newline-delimited events. JSON consumers should

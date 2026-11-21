@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -14,8 +16,8 @@ import (
 	"github.com/attrition-tech/arkex/internal/session"
 )
 
-// Disk work belongs to the run's worker. Only a committed, immutable snapshot
-// crosses back to the UI, before the worker sends its run-complete message.
+// All writers share the persistence lock. Only committed, immutable snapshots
+// cross back to the UI; the agent worker alone owns live conversation history.
 type contextSavedMsg struct {
 	owner *session.Session
 	saved session.Session
@@ -23,12 +25,18 @@ type contextSavedMsg struct {
 }
 
 type contextPersistence struct {
-	owner *session.Session
-	state session.Session
-	send  func(tea.Msg)
+	mu        sync.Mutex
+	owner     *session.Session
+	state     session.Session
+	send      func(tea.Msg)
+	run       bool
+	steerOpen bool // admission and final completion share mu
+	started   bool
 }
 
 func (p *contextPersistence) store(ctx context.Context, messages []fantasy.Message) (string, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.send == nil {
 		return "", errors.New("session event loop is unavailable")
 	}
@@ -46,9 +54,12 @@ func (p *contextPersistence) store(ctx context.Context, messages []fantasy.Messa
 // Finish on the same worker as compaction, before announcing run completion.
 // Otherwise the final usage save can block the UI on the very lock that Esc
 // just cancelled. A cancelled run gets a short best-effort save of partial work.
-func (p *contextPersistence) finish(ctx context.Context, messages []fantasy.Message, usage fantasy.Usage, lastInput int64) {
+func (p *contextPersistence) finish(ctx context.Context, messages []fantasy.Message, usage fantasy.Usage, lastInput int64, runErr error) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.steerOpen = false
 	if p.send == nil {
-		return
+		return nil
 	}
 	if ctx.Err() != nil {
 		var cancel context.CancelFunc
@@ -59,8 +70,24 @@ func (p *contextPersistence) finish(ctx context.Context, messages []fantasy.Mess
 	next.History = append([]fantasy.Message(nil), next.History...)
 	next.Update(messages, session.Usage{Model: next.Model, Input: next.UsageIn + usage.InputTokens, Output: next.UsageOut + usage.OutputTokens})
 	next.LastInput = lastInput
+	if p.run {
+		next.RunPending = runErr != nil
+	}
+	if runErr != nil {
+		next.QueuePaused = true
+	}
+	// Unconsumed steering belongs to this run only. After a stop/error it
+	// remains an editable, paused follow-up, never a steer for another run.
+	next.Pending = append([]session.PendingInput(nil), next.Pending...)
+	for i := range next.Pending {
+		next.Pending[i].Steer = false
+	}
 	err := next.SaveWithContext(ctx)
+	if err == nil {
+		p.state = next
+	}
 	p.send(contextSavedMsg{owner: p.owner, saved: next, err: err})
+	return err
 }
 
 func (m *model) contextSaved(msg contextSavedMsg) {
@@ -69,7 +96,14 @@ func (m *model) contextSaved(msg contextSavedMsg) {
 			m.appendSystem("could not save the session: " + msg.err.Error())
 			m.refresh()
 		} else {
+			changed := !slices.EqualFunc(m.conv.Pending, msg.saved.Pending, func(a, b session.PendingInput) bool {
+				return a.ID == b.ID && a.Steer == b.Steer
+			})
 			*m.conv = msg.saved
+			if changed {
+				m.refreshPendingPalette()
+			}
+			m.refresh()
 		}
 	}
 }
@@ -98,6 +132,7 @@ func (m *model) compact() tea.Cmd {
 	}
 	m.disarmConfirmation()
 	m.running = true
+	m.runStopped = false
 	m.compacting = true
 	m.compactStarted = time.Now()
 	m.compactStage = "preparing history"
@@ -121,7 +156,7 @@ func (m *model) compact() tea.Cmd {
 		co := newCoalescer(send)
 		res, err := ag.CompactWithProgress(ctx, co.push)
 		co.flush()
-		persistence.finish(ctx, ag.Messages(), res.Usage, ag.LastInput())
+		err = errors.Join(err, persistence.finish(ctx, ag.Messages(), res.Usage, ag.LastInput(), err))
 		return compactDoneMsg{res: res, err: err}
 	}, m.workingTick())
 }
@@ -131,6 +166,7 @@ func (m *model) compactDone(msg compactDoneMsg) tea.Cmd {
 	m.disarmConfirmation()
 	m.running = false
 	m.compacting = false
+	m.refreshPendingPalette()
 	m.cancel = nil
 	m.status = ""
 	switch {
@@ -141,7 +177,10 @@ func (m *model) compactDone(msg compactDoneMsg) tea.Cmd {
 	}
 	m.finishPendingTitle()
 	m.refresh()
-	return m.finishPromptAction()
+	if m.conv != nil && (msg.err != nil || m.runStopped) {
+		m.conv.QueuePaused = true
+	}
+	return tea.Batch(m.finishPromptAction(), m.startQueued(false))
 }
 
 // learnedContextWindow reports a window the agent picked up from an

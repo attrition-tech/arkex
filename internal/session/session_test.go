@@ -240,3 +240,25 @@ func TestIDsWithPathSeparatorsAreRejected(t *testing.T) {
 		}
 	}
 }
+
+func TestPendingOnlySessionSurvivesRestartAndRemoval(t *testing.T) {
+	t.Setenv("ARKEX_HOME", t.TempDir())
+	s := New(t.TempDir())
+	s.Pending = []PendingInput{{ID: "input-37", Text: "Later task", Model: "local/m", Message: fantasy.NewUserMessage("Later task",
+		fantasy.FilePart{Filename: "removed.png", MediaType: "image/png", Data: []byte{2, 4, 8}})}}
+	if err := s.Save(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := Load(s.Cwd, s.ID)
+	if err != nil || !reflect.DeepEqual(loaded.Pending, s.Pending) || len(loaded.Messages) != 0 {
+		t.Fatalf("pending-only session lost its snapshot: %v", err)
+	}
+	loaded.Pending = nil
+	if err := loaded.Save(); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err = Load(s.Cwd, s.ID)
+	if err != nil || len(loaded.Pending) != 0 {
+		t.Fatal("removed pending-only entry resurrected on restart", err)
+	}
+}

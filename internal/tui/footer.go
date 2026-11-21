@@ -57,6 +57,7 @@ type footerKey struct {
 	pending            bool   // approval prompt up: its keys replace the hints
 	retry              bool
 	hover              footerAction
+	inbox              string
 }
 
 // footerRows is the height of the toolbar plus the status line.
@@ -105,6 +106,22 @@ func (m *model) footer() string {
 	if m.conv != nil {
 		key.usageIn += m.conv.TitleUsageIn
 		key.usageOut += m.conv.TitleUsageOut
+		steers := 0
+		for _, input := range m.conv.Pending {
+			if input.Steer {
+				steers++
+			}
+		}
+		if n := len(m.conv.Pending); n > 0 {
+			if m.conv.QueuePaused {
+				key.inbox = fmt.Sprintf("Paused pending: %d · /queue", n)
+			} else {
+				key.inbox = fmt.Sprintf("Steering pending: %d · Queued: %d · /queue", steers, n-steers)
+			}
+		}
+	}
+	if m.inboxSaving {
+		key.inbox = "Saving pending message…"
 	}
 	if m.inputRows > m.input.Height() {
 		key.inputRows = m.inputRows
@@ -265,6 +282,9 @@ func (m *model) statusLine(key footerKey) string {
 		return " " + hintsStyle.Render(ansi.Truncate(approvalHint(m.width), m.width-1, "…"))
 	}
 	var parts []string
+	if key.inbox != "" {
+		parts = append(parts, key.inbox)
+	}
 	switch {
 	case key.status != "":
 		parts = append(parts, key.status)
@@ -275,6 +295,9 @@ func (m *model) statusLine(key footerKey) string {
 		parts = append(parts, fmt.Sprintf("input %d lines", key.inputRows))
 	}
 	if len(parts) == 0 {
+		if key.running {
+			return " " + hintsStyle.Render(ansi.Truncate("enter steer · cmd+enter queue · shift+enter newline", m.width-1, "…"))
+		}
 		if !key.inputEmpty {
 			return ""
 		}

@@ -134,7 +134,9 @@ func TestSaveAndResume(t *testing.T) {
 	}
 	ag.SetMessages(sampleMessages())
 	m.usageIn, m.usageOut, m.lastInput = 42, 7, 17
-	m.persistence.finish(t.Context(), ag.Messages(), fantasy.Usage{InputTokens: 42, OutputTokens: 7}, 17)
+	if err := m.persistence.finish(t.Context(), ag.Messages(), fantasy.Usage{InputTokens: 42, OutputTokens: 7}, 17, nil); err != nil {
+		t.Fatal(err)
+	}
 	h.drive(func() tea.Msg { return runDoneMsg{} })
 	list, err := session.List(m.o.Cwd)
 	if err != nil || len(list) != 1 || list[0].Title != "fix the build" || list[0].Messages != 4 {
@@ -165,7 +167,9 @@ func TestSaveAndResume(t *testing.T) {
 
 	// The next turn appends to the same session file rather than a new one.
 	m.submit("thanks", nil)
-	m.persistence.finish(t.Context(), m.sess.Agent.Messages(), fantasy.Usage{}, 17)
+	if err := m.persistence.finish(t.Context(), m.sess.Agent.Messages(), fantasy.Usage{}, 17, nil); err != nil {
+		t.Fatal(err)
+	}
 	h.drive(func() tea.Msg { return runDoneMsg{} })
 	if list, _ := session.List(m.o.Cwd); len(list) != 1 || list[0].ID != id {
 		t.Fatalf("resumed session must be updated in place, got %+v", list)

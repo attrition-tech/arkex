@@ -118,7 +118,10 @@ type approvalMsg struct {
 	err     error
 }
 
-type runDoneMsg struct{ err error }
+type runDoneMsg struct {
+	gen int
+	err error
+}
 
 // compactDoneMsg ends a manual /compact.
 type compactDoneMsg struct {
@@ -277,6 +280,10 @@ type model struct {
 	lineBuf        []string            // transcript lines, reused between refreshes
 	conv           *session.Session    // current conversation on disk; nil until the first turn
 	persistence    *contextPersistence // owned by the current run's worker
+	inboxSaving    bool
+	inboxReplaying bool
+	inboxDeferred  []tea.Msg
+	runStopped     bool
 	titles         map[string]*titleJob
 	hist           *history    // prompt history for this directory
 	shellNotes     []shellNote // !cmd results waiting to ride along with the next prompt
@@ -372,6 +379,19 @@ func newBlock(kind blockKind, text string) *block {
 func (m *model) Init() tea.Cmd { return tea.Batch(m.startupCmd, m.flashTimer()) }
 
 func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
+	if m.inboxSaving {
+		switch event := msg.(type) {
+		case tea.KeyPressMsg:
+			// Stop remains responsive while an admission waits on disk.
+			if event.String() != "esc" && event.String() != "ctrl+c" {
+				m.inboxDeferred = append(m.inboxDeferred, msg)
+				return m, nil
+			}
+		case tea.PasteMsg, tea.MouseMsg, approvalMsg, shellDoneMsg, runDoneMsg, compactDoneMsg, sessionTitleMsg, sessionConnectedMsg, reasoningCheckedMsg:
+			m.inboxDeferred = append(m.inboxDeferred, msg)
+			return m, nil
+		}
+	}
 	gen := m.flashGen
 	defer func() {
 		// Actions can replace the notice without threading a timer through
@@ -433,6 +453,28 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 	case contextSavedMsg:
 		m.contextSaved(msg)
 		return m, nil
+	case inboxDoneMsg:
+		return m, m.inboxDone(msg)
+	case inputDeliveredMsg:
+		if msg.owner == m.conv {
+			var files []string
+			for _, part := range msg.input.Message.Content {
+				if file, ok := fantasy.AsMessagePart[fantasy.FilePart](part); ok {
+					files = append(files, file.Filename)
+				}
+			}
+			b := userBlock(msg.input.Text, files)
+			b.prompt = msg.prompt
+			m.blocks = append(m.blocks, b)
+			if msg.input.Steer {
+				m.appendSystem("Steering applied to context · next request uses this instruction")
+			} else {
+				m.appendSystem("Queued message started")
+			}
+			m.stickBottom = true
+			m.refresh()
+		}
+		return m, nil
 
 	case approvalMsg:
 		m.disarmConfirmation()
@@ -486,6 +528,12 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 		return m, nil
 
 	case runDoneMsg:
+		if msg.gen != 0 && msg.gen != m.runGen {
+			return m, nil
+		}
+		if m.runStopped && msg.err == nil {
+			msg.err = context.Canceled
+		}
 		m.compacting = false
 		m.disarmConfirmation()
 		if errors.Is(msg.err, context.Canceled) {
@@ -505,6 +553,7 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 		m.retry = nil
 		m.runDuration = time.Since(m.startedAt)
 		m.running = false
+		m.refreshPendingPalette()
 		m.cancel = nil
 		m.step = 0
 		if msg.err == nil && !m.responseTiming.firstText.IsZero() {
@@ -523,6 +572,9 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 		} else if errors.Is(msg.err, context.Canceled) {
 			m.appendSystem("cancelled")
 		}
+		if msg.err != nil && m.conv != nil {
+			m.conv.QueuePaused = true
+		}
 		m.status = ""
 		m.refresh()
 		var bell tea.Cmd
@@ -534,7 +586,7 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 		if msg.err == nil {
 			title = m.automaticTitle()
 		}
-		return m, tea.Batch(m.finishPromptAction(), bell, title)
+		return m, tea.Batch(m.finishPromptAction(), bell, title, m.startQueued(false))
 	case compactDoneMsg:
 		return m, m.compactDone(msg)
 	case sessionTitleMsg:
@@ -711,6 +763,11 @@ func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.input.InsertString("\n")
 		m.resizeInput()
 		return m, nil
+	case "super+enter":
+		if m.editingPrompt != nil {
+			return m, nil
+		}
+		return m, m.enqueueDraft(false)
 	case "backspace":
 		if m.input.Value() == "" && len(m.attachments) > 0 {
 			m.removeAttachment(len(m.attachments) - 1)
@@ -739,9 +796,7 @@ func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return m.command(text)
 		}
 		if m.running {
-			m.appendSystem("still working; wait or press esc twice to cancel")
-			m.refresh()
-			return m, nil
+			return m, m.enqueueDraft(true)
 		}
 		if m.sess.Agent == nil && (!strings.HasPrefix(text, "!") || len(text) <= 1) {
 			// Connecting must not consume the draft or its attachments.
@@ -854,6 +909,8 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		return m, m.compact()
 	case "/timing":
 		return m, m.openPaletteSub("Run timing (current session)", timingItems(m))
+	case "/queue":
+		return m, m.openPaletteSub("Pending messages", pendingItems(m))
 	case "/continue":
 		if !m.paused {
 			m.appendSystem("nothing to continue — the last run finished on its own")
@@ -995,6 +1052,7 @@ func (m *model) startRunAt(sentAt time.Time, fn func(context.Context, *agent.Age
 	m.rollAt, m.rollScheduled = time.Time{}, false
 	m.rollPaused = time.Time{}
 	m.running = true
+	m.runStopped = false
 	m.paused = false
 	m.startedAt = sentAt
 	m.responseTiming = responseTiming{start: sentAt}
@@ -1014,6 +1072,8 @@ func (m *model) startRunAt(sentAt time.Time, fn func(context.Context, *agent.Age
 	}
 	ag := m.sess.Agent
 	persistence := m.persistence
+	persistence.run, persistence.steerOpen = true, true
+	gen := m.runGen
 	done := make(chan struct{})
 	m.runDone = done
 	run := func() tea.Msg {
@@ -1021,6 +1081,10 @@ func (m *model) startRunAt(sentAt time.Time, fn func(context.Context, *agent.Age
 		// Events are folded per frame; the final flush runs before
 		// runDoneMsg is returned, so the program sees them in order.
 		co := newCoalescer(send)
+		ag.NextInput = func(ctx context.Context, history []fantasy.Message, completing bool) ([]fantasy.Message, error) {
+			co.flush()
+			return persistence.takeInput(ctx, history, completing)
+		}
 		ag.Retry = func(ctx context.Context, err error, partial bool) bool {
 			co.flush()
 			reply := make(chan bool, 1)
@@ -1032,16 +1096,17 @@ func (m *model) startRunAt(sentAt time.Time, fn func(context.Context, *agent.Age
 				return answer
 			}
 		}
-		defer func() { ag.Retry = nil }()
+		defer func() { ag.Retry, ag.NextInput = nil, nil }()
 		err := fn(ctx, ag, co.push)
 		co.flush()
-		persistence.finish(ctx, ag.Messages(), ag.LastUsage(), ag.LastInput())
-		return runDoneMsg{err: err}
+		err = errors.Join(err, persistence.finish(ctx, ag.Messages(), ag.LastUsage(), ag.LastInput(), err))
+		return runDoneMsg{gen: gen, err: err}
 	}
 	return tea.Batch(run, m.workingTick())
 }
 
 func (m *model) cancelRun() {
+	m.runStopped = true
 	if m.cancel != nil {
 		m.cancel()
 	}

@@ -64,7 +64,7 @@ func finishInboxRun(t *testing.T, h *harness, done <-chan []tea.Msg) {
 	}
 }
 
-func queueKey() tea.KeyPressMsg { return tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModSuper} }
+func queueKey() tea.KeyPressMsg { return tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModAlt} }
 
 func TestSteeringAndQueuePreserveTurnsAndAttachments(t *testing.T) {
 	for _, withTool := range []bool{false, true} {
@@ -74,8 +74,8 @@ func TestSteeringAndQueuePreserveTurnsAndAttachments(t *testing.T) {
 				first = streamToolCall("read-once", "source.txt")
 			}
 			lm := &fakeLM{script: []string{first, streamText("Steered answer", 30), streamText("First queued answer", 40), streamText("Second queued answer", 50)}}
-			started, release := holdInboxResponse(t, lm)
 			h := fakeAgentModel(t, lm, 100000)
+			started, release := holdInboxResponse(t, lm)
 			path := filepath.Join(h.o.Cwd, "source.txt")
 			if err := os.WriteFile(path, []byte("source-snapshot-37"), 0600); err != nil {
 				t.Fatal(err)
@@ -101,7 +101,8 @@ func TestSteeringAndQueuePreserveTurnsAndAttachments(t *testing.T) {
 				h.drive(cmd)
 			}
 			h.setInput("Later two")
-			_, cmd = h.Update(queueKey())
+			// Keep forwarded Cmd+Enter working for existing terminal overrides.
+			_, cmd = h.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModSuper})
 			h.drive(cmd)
 			saved, err := session.Load(h.o.Cwd, h.conv.ID)
 			if err != nil || len(saved.Pending) != 4 || len(saved.Messages) != 1 || !saved.RunPending {

@@ -259,7 +259,7 @@ func (m *model) paletteItems() []paletteItem {
 		paletteItem{group: "Session", title: "New conversation", hint: "/clear", cmd: "/clear"},
 		paletteItem{group: "Session", title: "Resume session", hint: "/resume", sub: sessionItems},
 		paletteItem{group: "Session", title: "Pending messages", hint: "/queue", sub: pendingItems},
-		paletteItem{group: "Session", title: "Queue current draft", hint: "cmd+enter", action: func(m *model) tea.Cmd {
+		paletteItem{group: "Session", title: "Queue current draft", hint: "alt+enter", action: func(m *model) tea.Cmd {
 			m.closePalette()
 			return m.enqueueDraft(false)
 		}},

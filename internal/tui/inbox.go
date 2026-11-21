@@ -293,7 +293,7 @@ func (m *model) refreshPendingPalette() {
 }
 
 func pendingItems(m *model) []paletteItem {
-	items := []paletteItem{{title: "Queue current draft", hint: "cmd+enter", action: func(m *model) tea.Cmd {
+	items := []paletteItem{{title: "Queue current draft", hint: "alt+enter", action: func(m *model) tea.Cmd {
 		m.closePalette()
 		return m.enqueueDraft(false)
 	}}}

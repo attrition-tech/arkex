@@ -296,7 +296,7 @@ func (m *model) statusLine(key footerKey) string {
 	}
 	if len(parts) == 0 {
 		if key.running {
-			return " " + hintsStyle.Render(ansi.Truncate("enter steer · cmd+enter queue · shift+enter newline", m.width-1, "…"))
+			return " " + hintsStyle.Render(ansi.Truncate("enter steer · alt+enter queue · shift+enter newline", m.width-1, "…"))
 		}
 		if !key.inputEmpty {
 			return ""

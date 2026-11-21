@@ -176,10 +176,12 @@ arkex -p "explain this project"        # one-shot answer
 
 While the interactive agent is working, **Enter steers** its next model/tool
 step; it does not interrupt the current response or cancel running tools.
-**Shift+Enter inserts a newline. Cmd+Enter queues** a separate follow-up turn.
-If your terminal does not forward Cmd+Enter, use **Queue current draft** in the
-command palette. Tab still completes `@file` names and navigates sent prompts
-when the composer is empty.
+**Shift+Enter (or Ctrl+J) inserts a newline. Option+Enter (Alt+Enter) queues** a
+separate follow-up turn without conflicting with Ghostty's macOS fullscreen
+shortcut. Forwarded Cmd+Enter remains supported for existing terminal overrides.
+If your terminal cannot distinguish modified Enter keys, use Ctrl+J for a newline
+and **Queue current draft** in the command palette. Tab still completes `@file`
+names and navigates sent prompts when the composer is empty.
 
 Pending messages and their attachment contents are saved locally before the
 composer clears. The footer distinguishes **Steering pending** from **Queued**;

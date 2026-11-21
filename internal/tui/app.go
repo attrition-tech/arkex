@@ -759,11 +759,11 @@ func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if k.String() == "shift+tab" {
 			return m, nil
 		}
-	case "alt+enter", "ctrl+j", "shift+enter":
+	case "ctrl+j", "shift+enter":
 		m.input.InsertString("\n")
 		m.resizeInput()
 		return m, nil
-	case "super+enter":
+	case "alt+enter", "super+enter":
 		if m.editingPrompt != nil {
 			return m, nil
 		}

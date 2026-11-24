@@ -59,6 +59,7 @@ type footerKey struct {
 	hover              footerAction
 	inbox              string
 	messageFocus       bool
+	link               string
 }
 
 // footerRows is the height of the toolbar plus the status line.
@@ -104,6 +105,7 @@ func (m *model) footer() string {
 		hover:      m.hoverAct, pending: m.pending != nil,
 		retry:        m.pending != nil && m.pending.title != "",
 		messageFocus: m.promptFocus != nil,
+		link:         m.hoveredLink(),
 	}
 	if m.conv != nil {
 		key.usageIn += m.conv.TitleUsageIn
@@ -282,6 +284,13 @@ func (m *model) statusLine(key footerKey) string {
 			return " " + hintsStyle.Render(ansi.Truncate("←/→ choose · enter confirm · esc twice cancels · ctrl+c twice stops", m.width-1, "…"))
 		}
 		return " " + hintsStyle.Render(ansi.Truncate(approvalHint(m.width), m.width-1, "…"))
+	}
+	if key.link != "" {
+		label := "Click to open · "
+		if remoteTerminal() {
+			label = "SSH: terminal link gesture · "
+		}
+		return " " + textStyle.Foreground(theme.Tool).Render(ansi.Truncate(label+key.link, m.width-1, "…"))
 	}
 	if key.messageFocus {
 		return " " + hintsStyle.Render(ansi.Truncate("enter actions · tab older · shift+tab newer · esc composer", m.width-1, "…"))

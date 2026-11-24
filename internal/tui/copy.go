@@ -50,6 +50,9 @@ func replyActions(source string) []paletteItem {
 		item.detail = strings.Join(strings.Fields(code), " ")
 		items = append(items, item)
 	}
+	if links := replyLinks(source); len(links) > 0 {
+		items = append(items, paletteItem{title: "Links", hint: fmt.Sprintf("%d", len(links)), sub: func(*model) []paletteItem { return links }})
+	}
 	return items
 }
 

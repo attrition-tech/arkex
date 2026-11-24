@@ -53,6 +53,7 @@ func helpText() string {
 	}
 	sb.WriteString("welcome: tab/shift+tab selects the input, model, or recent sessions; enter activates the selection\n")
 	sb.WriteString("keys: enter send (steer while working) · shift+enter or ctrl+j newline · alt+enter queue (Option+Enter on macOS; or search Queue current draft in the palette) · tab highlights older messages and replies from empty input, shift+tab newer then composer · enter opens actions for the highlighted message; e edits a sent prompt · click Copy code above a code block, Reply actions below a reply, or a sent message for its actions · esc returns to the composer or cancels editing; resend creates a new branch without undoing file changes · up/down input history · / or ctrl+p command palette (search all commands; esc goes back) · @file attach a file (png/jpg/gif/webp become image chips; backspace on an empty input removes the last) · !cmd run a shell command · ctrl+l clear screen · esc or ctrl+c twice within 2s stops a run; ctrl+c twice exits when idle (selected text copies instead) · pgup/pgdown, ctrl+up/down, ctrl+home/end scroll · wheel scrolls · click toggles a card (one detail open at a time)")
+	sb.WriteString("\nlinks: click a web link to open it; hover shows its destination · drag selects without opening · Reply actions → Links → Copy URL · over SSH, use your terminal's link gesture or Copy URL to open locally")
 	return sb.String()
 }
 

@@ -197,6 +197,12 @@ through Tab then Enter; search **Copy reply or code** for older replies. Sent
 messages offer copy, edit/resend, and removal actions. **Copy selection** appears
 only when text is selected; existing selection auto-copy behavior is unchanged.
 
+Click a web link in a reply to open it; hover to see its destination in the footer.
+Dragging still selects and copies text without opening the link. **Reply actions
+→ Links** offers **Open in browser** and **Copy URL**. Over SSH, use Copy URL or
+your terminal's link gesture to open it locally; Arkex does not launch a remote
+browser. Native terminal hyperlinks remain available when mouse support is off.
+
 Pending messages and their attachment contents are saved locally before the
 composer clears. The footer distinguishes **Steering pending** from **Queued**;
 the transcript confirms when steering enters context. `/queue` lets you review,

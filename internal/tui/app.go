@@ -171,6 +171,7 @@ type block struct {
 	wrapLines   []string
 	streamMD    *streamMarkdownMsg
 	codeActions []codeAction
+	links       []linkSpan
 }
 
 // renderKey captures everything a block's rendering depends on. Content is
@@ -226,6 +227,7 @@ type model struct {
 	hoverCode  int          // one-based copy control in hoverBlock
 	hoverGroup *block       // group header, identified by its first member
 	hoverWork  *block       // completed-turn Work header
+	pointer    *pos         // last mouse position, in screen coordinates
 
 	vp     scroller
 	input  textarea.Model
@@ -602,6 +604,13 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 	case copySelectionMsg:
 		if m.sel != nil && !m.sel.dragging && m.sel.gen == msg.gen {
 			return m, m.copySelection()
+		}
+		return m, nil
+	case linkOpenedMsg:
+		if msg.err != nil {
+			m.flash("Could not open browser · Copy URL in Reply actions → Links. " + msg.err.Error())
+		} else {
+			m.flash("Opening link in browser")
 		}
 		return m, nil
 	case flashClearMsg:
@@ -1283,6 +1292,7 @@ func (m *model) replaceTranscript(blocks []*block) {
 	m.openDetail, m.openGroup, m.openWork = nil, nil, nil
 	m.hoverBlock, m.hoverGroup, m.hoverWork = nil, nil, nil
 	m.hoverCode = 0
+	m.pointer = nil
 	m.clearSelection()
 	m.historyCache.first, m.historyCache.turn = nil, nil
 	m.historyCache.lines, m.historyCache.spans = nil, nil
@@ -1485,6 +1495,7 @@ func (m *model) renderBlocks(width int) []string {
 					for _, hidden := range m.blocks[section.start:section.end] {
 						hidden.lines, hidden.wrapLines, hidden.streamMD = nil, nil, nil
 						hidden.codeActions = nil
+						hidden.links = nil
 						hidden.wrapDone = 0
 					}
 				}
@@ -1671,6 +1682,9 @@ func (m *model) renderBlockLines(b *block, inner int, streaming, grouped bool) (
 			padded[i] = margin + ansi.Truncate(line, inner, "")
 		}
 		b.lines, lines = padded, padded
+		if b.kind == blockAssistant {
+			b.links = renderedLinks(padded)
+		}
 	}()
 	prev := b.key
 	b.key = key

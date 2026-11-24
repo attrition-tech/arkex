@@ -27,8 +27,10 @@ func (p pos) before(q pos) bool { return p.line < q.line || (p.line == q.line &&
 
 type selection struct {
 	anchor, head pos
-	dragging     bool // button still held
-	gen          int  // bumped on every change; stale copy timers compare it
+	dragging     bool   // button still held
+	moved        bool   // a drag that returns to its anchor is still not a click
+	link         string // destination under the original press
+	gen          int    // bumped on every change; stale copy timers compare it
 }
 
 // empty is true while nothing has been dragged over.
@@ -49,7 +51,7 @@ var markStyle lipgloss.Style
 
 // selectPress starts a selection at the pressed cell.
 func (m *model) selectPress(x, y int) {
-	m.sel = &selection{dragging: true, gen: m.selGen()}
+	m.sel = &selection{dragging: true, gen: m.selGen(), link: m.linkAt(x, y)}
 	m.sel.anchor = pos{line: m.vp.YOffset() + y, col: x}
 	m.sel.head = m.sel.anchor
 }
@@ -71,6 +73,7 @@ func (m *model) selectDrag(x, y int) {
 		y = m.vp.Height() - 1
 	}
 	m.sel.head = pos{line: m.vp.YOffset() + y, col: max(0, x)}
+	m.sel.moved = m.sel.moved || m.sel.head != m.sel.anchor
 	m.sel.gen = m.selGen()
 }
 
@@ -82,8 +85,9 @@ func (m *model) selectRelease() (clicked bool, cmd tea.Cmd) {
 	}
 	m.sel.dragging = false
 	if m.sel.empty() {
+		clicked := !m.sel.moved
 		m.sel = nil
-		return true, nil
+		return clicked, nil
 	}
 	gen := m.sel.gen
 	return false, tea.Tick(copyDelay, func(time.Time) tea.Msg { return copySelectionMsg{gen: gen} })

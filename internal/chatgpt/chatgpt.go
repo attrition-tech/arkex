@@ -515,5 +515,9 @@ func OpenBrowser(u string) error {
 	} else {
 		c = exec.Command("xdg-open", u)
 	}
-	return c.Start()
+	if err := c.Start(); err != nil {
+		return err
+	}
+	go func() { _ = c.Wait() }()
+	return nil
 }

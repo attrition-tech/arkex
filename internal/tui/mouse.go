@@ -47,6 +47,7 @@ func (s span) codeActionAt(x, line int) int {
 // it off so terminals that need it for native text selection get it back.
 func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	mo := msg.Mouse()
+	m.pointer = &pos{line: mo.Y, col: mo.X}
 	if m.inputDragging {
 		switch msg.(type) {
 		case tea.MouseMotionMsg:
@@ -115,7 +116,16 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		if mo.Button != tea.MouseLeft {
 			return m, nil
 		}
+		// Only activate the same destination that was pressed. A streamed
+		// reflow, scroll or release elsewhere must not open a different link.
+		target := ""
+		if s := m.sel; s != nil && s.dragging && s.anchor == (pos{line: m.vp.YOffset() + mo.Y, col: mo.X}) {
+			target = s.link
+		}
 		clicked, cmd := m.selectRelease()
+		if clicked && target != "" && m.linkAt(mo.X, mo.Y) == target {
+			return m, m.openLink(target)
+		}
 		if clicked && mo.Y < m.vp.Height() {
 			if s, ok := m.spanAt(m.vp.YOffset() + mo.Y); ok && !s.workHeader {
 				if s.b.kind == blockUser {

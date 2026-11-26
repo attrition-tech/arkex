@@ -32,7 +32,7 @@ func TestLoaderUsesTwoPlainDotCells(t *testing.T) {
 
 func TestWorkingStripFollowsTheRun(t *testing.T) {
 	m, _ := testModel(t)
-	m.setSession(Connection{Agent: &agent.Agent{}})
+	m.setConnection(Connection{Agent: &agent.Agent{}})
 	m.layout()
 
 	// Idle: no strip.

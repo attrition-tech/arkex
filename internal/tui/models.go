@@ -1043,7 +1043,7 @@ func (m *model) saveDraft(ids []string) tea.Cmd {
 	}
 	defSel := ""
 	adding := p.editID == ""
-	if adding && first != "" && (p.cfg.Default == "" || m.sess.Agent == nil) {
+	if adding && first != "" && (p.cfg.Default == "" || m.connection.Agent == nil) {
 		defSel = first
 	}
 	done := fmt.Sprintf("saved %s", p.draftID)
@@ -1065,7 +1065,7 @@ func (m *model) saveDraft(ids []string) tea.Cmd {
 	p.mode = pmList
 	m.afterEdit(err, done, p.draftID)
 	p.draft, p.draftID, p.editID, p.draftAuthID = config.Connection{}, "", "", ""
-	if err != nil || !adding || m.sess.Agent != nil || first == "" || d.Disabled {
+	if err != nil || !adding || m.connection.Agent != nil || first == "" || d.Disabled {
 		return nil
 	}
 	return m.connect(first, false)
@@ -1324,13 +1324,13 @@ func (m *model) panelMsg(msg tea.Msg) (tea.Cmd, bool) {
 				m.refresh()
 			}
 		default:
-			old := m.sess
-			m.setSession(msg.conn)
-			m.carryConv(old, msg.conn) // the conversation continues on the new model
-			m.saveConv()               // remember the model even if no further prompt is sent
+			old := m.connection
+			m.setConnection(msg.conn)
+			m.carryMessages(old, msg.conn) // the session continues on the new model
+			m.saveSession()                // remember the model even if no further prompt is sent
 			text := "using " + msg.name
 			if old.Agent != nil && len(old.Agent.Messages()) > 0 {
-				text += " · conversation carried over"
+				text += " · message history carried over"
 				if providerOf(old.Name) != providerOf(msg.name) {
 					text += " (reasoning dropped: different provider)"
 				}
@@ -1699,7 +1699,7 @@ func (p *modelsPanel) listLines(m *model, inner, height int) []string {
 		}
 	}
 	nameW = min(nameW, 20)
-	current := currentSelector(m.sess.Name)
+	current := currentSelector(m.connection.Name)
 
 	var out []string
 	for li := p.top; li < len(entries) && len(out) < height; li++ {

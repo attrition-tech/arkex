@@ -48,8 +48,8 @@ func sessionModelHarness(t *testing.T) (*harness, *session.Session) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.setSession(curr)
-	m.sess.Agent.SetMessages([]fantasy.Message{fantasy.NewUserMessage("current conversation")})
+	m.setConnection(curr)
+	m.connection.Agent.SetMessages([]fantasy.Message{fantasy.NewUserMessage("current conversation")})
 	s := session.New(m.o.Cwd)
 	s.Update(sampleMessages(), session.Usage{Model: "local/a:high", Input: 71, Output: 19})
 	s.LastInput = 33
@@ -61,7 +61,7 @@ func sessionModelHarness(t *testing.T) (*harness, *session.Session) {
 	return &harness{model: m}, s
 }
 
-func TestScratchFollowsConversationNotModel(t *testing.T) {
+func TestScratchFollowsSessionNotModel(t *testing.T) {
 	h, saved := sessionModelHarness(t)
 	var store scratch.Store
 	t.Cleanup(func() { _ = store.Close() })
@@ -79,51 +79,51 @@ func TestScratchFollowsConversationNotModel(t *testing.T) {
 		if err := h.prepareAgent(); err != nil {
 			t.Fatal(err)
 		}
-		if strings.Count(h.sess.Agent.System, "# Temporary files") != 1 || !strings.Contains(h.sess.Agent.System, active) {
+		if strings.Count(h.connection.Agent.System, "# Temporary files") != 1 || !strings.Contains(h.connection.Agent.System, active) {
 			t.Fatal("stale or duplicated scratch instructions")
 		}
 		return active
 	}
 	first := prepare()
-	firstSession := h.conv
+	firstSession := h.session
 	next, err := h.o.Connect(t.Context(), "local/a:high")
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.carryConv(h.sess, next)
-	h.setSession(next)
+	h.carryMessages(h.connection, next)
+	h.setConnection(next)
 	if prepare() != first {
 		t.Fatal("model switch replaced scratch")
 	}
-	h.newConv()
+	h.resetSession()
 	if prepare() == first {
-		t.Fatal("new conversation reused scratch")
+		t.Fatal("new session reused scratch")
 	}
-	h.loadConversation(firstSession)
+	h.loadSession(firstSession)
 	if prepare() != first {
-		t.Fatal("same-run resume lost scratch")
+		t.Fatal("same-process resume lost scratch")
 	}
-	h.loadConversation(saved)
+	h.loadSession(saved)
 	if prepare() == first {
-		t.Fatal("other saved conversation reused scratch")
+		t.Fatal("other saved session reused scratch")
 	}
 }
 
 func TestResumeRestoresModelWithoutChangingDefault(t *testing.T) {
 	h, s := sessionModelHarness(t)
-	old := h.sess.Agent
+	old := h.connection.Agent
 	cmd := h.resume(s.ID)
-	if h.sess.Agent != old || h.conv != nil {
+	if h.connection.Agent != old || h.session != nil {
 		t.Fatal("changed session before connection completed")
 	}
 	h.drive(cmd)
-	if h.sess.Agent.LastInput() != 33 {
-		t.Fatalf("resume lost compaction measurement: %d", h.sess.Agent.LastInput())
+	if h.connection.Agent.LastInput() != 33 {
+		t.Fatalf("resume lost compaction measurement: %d", h.connection.Agent.LastInput())
 	}
-	if h.sess.Name != "local/a:high" || h.sess.Agent.Model.Ref.Thinking != "high" || h.conv.ID != s.ID || h.lastInput != 33 {
-		t.Fatalf("wrong restored session: model=%s effort=%s", h.sess.Name, h.sess.Agent.Model.Ref.Thinking)
+	if h.connection.Name != "local/a:high" || h.connection.Agent.Model.Ref.Thinking != "high" || h.session.ID != s.ID || h.lastInput != 33 {
+		t.Fatalf("wrong restored session: model=%s effort=%s", h.connection.Name, h.connection.Agent.Model.Ref.Thinking)
 	}
-	if len(h.sess.Agent.Messages()) != len(s.Messages) {
+	if len(h.connection.Agent.Messages()) != len(s.Messages) {
 		t.Fatal("history lost")
 	}
 	cfg, _ := config.Load(h.o.Cwd)
@@ -132,13 +132,13 @@ func TestResumeRestoresModelWithoutChangingDefault(t *testing.T) {
 	}
 	_, cmd = h.command("/new")
 	h.drive(cmd)
-	if h.sess.Name != "local/b:low" || h.sess.Agent.Model.Ref.Thinking != "low" || h.conv != nil || len(h.sess.Agent.Messages()) != 0 {
+	if h.connection.Name != "local/b:low" || h.connection.Agent.Model.Ref.Thinking != "low" || h.session != nil || len(h.connection.Agent.Messages()) != 0 {
 		t.Fatal("new session did not use default with empty history")
 	}
 	// Startup resume does not require a working default connection first.
 	fresh := newModel(Options{Cwd: h.o.Cwd, ConfigPath: h.o.ConfigPath, Connect: h.o.Connect, Resume: s.ID})
 	(&harness{model: fresh}).drive(fresh.Init())
-	if fresh.sess.Name != "local/a:high" || fresh.conv.ID != s.ID {
+	if fresh.connection.Name != "local/a:high" || fresh.session.ID != s.ID {
 		t.Fatal("startup resume used default")
 	}
 }
@@ -151,9 +151,9 @@ func TestMissingSessionModelRequiresExplicitReplacement(t *testing.T) {
 	if err := config.SaveConnection(h.o.ConfigPath, "local", c, ""); err != nil {
 		t.Fatal(err)
 	}
-	old := h.sess.Agent
+	old := h.connection.Agent
 	h.drive(h.resume(s.ID))
-	if h.sess.Agent != old || h.conv != nil || h.pal == nil || !strings.Contains(h.pal.level().title, "choose replacement") {
+	if h.connection.Agent != old || h.session != nil || h.pal == nil || !strings.Contains(h.pal.level().title, "choose replacement") {
 		t.Fatal("silently replaced missing model")
 	}
 	saved, _ := session.Load(h.o.Cwd, s.ID)
@@ -164,7 +164,7 @@ func TestMissingSessionModelRequiresExplicitReplacement(t *testing.T) {
 		t.Fatalf("replacement choices: %+v", h.pal.view)
 	}
 	h.drive(h.pal.view[1].action(h.model))
-	if h.sess.Name != "local/b" || h.conv.ID != s.ID || h.sess.Agent.Model.Ref.Thinking != "" {
+	if h.connection.Name != "local/b" || h.session.ID != s.ID || h.connection.Agent.Model.Ref.Thinking != "" {
 		t.Fatal("replacement inherited incompatible saved effort")
 	}
 	saved, _ = session.Load(h.o.Cwd, s.ID)
@@ -179,13 +179,13 @@ func TestMissingSessionModelRequiresExplicitReplacement(t *testing.T) {
 
 func TestCancelledResumeIgnoresLateConnection(t *testing.T) {
 	h, s := sessionModelHarness(t)
-	old := h.sess.Agent
+	old := h.connection.Agent
 	msgs := runCmd(h.resume(s.ID))
 	h.closePalette()
 	for _, msg := range msgs {
 		h.Update(msg)
 	}
-	if h.sess.Agent != old || h.conv != nil {
+	if h.connection.Agent != old || h.session != nil {
 		t.Fatal("cancelled request changed session")
 	}
 }
@@ -197,7 +197,7 @@ func TestResumeIgnoresSupersededModelSwitch(t *testing.T) {
 	for _, msg := range late {
 		h.Update(msg)
 	}
-	if h.sess.Name != "local/a:high" || h.conv.ID != s.ID {
+	if h.connection.Name != "local/a:high" || h.session.ID != s.ID {
 		t.Fatal("older model switch overwrote resumed model")
 	}
 	saved, err := session.Load(h.o.Cwd, s.ID)

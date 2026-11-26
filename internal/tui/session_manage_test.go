@@ -26,7 +26,7 @@ import (
 func savedManagedSession(t *testing.T, m *model) *session.Session {
 	t.Helper()
 	s := session.New(m.o.Cwd)
-	s.Update(sampleMessages(), session.Usage{Model: m.sess.Name, Input: 4200, Output: 700})
+	s.Update(sampleMessages(), session.Usage{Model: m.connection.Name, Input: 4200, Output: 700})
 	s.LastInput = 730
 	if err := s.Save(); err != nil {
 		t.Fatal(err)
@@ -41,11 +41,11 @@ func TestSessionManagementLifecycle(t *testing.T) {
 	m.resume(s.ID)
 	m.command("/rename Deployment checks")
 	got, err := session.Load(m.o.Cwd, s.ID)
-	if err != nil || got.Title != "Deployment checks" || m.conv.Title != got.Title || got.UsageIn != 4200 || got.LastInput != 730 {
+	if err != nil || got.Title != "Deployment checks" || m.session.Title != got.Title || got.UsageIn != 4200 || got.LastInput != 730 {
 		t.Fatalf("rename lost state: %+v, %v", got, err)
 	}
 	// Subsequent autosaves must preserve the manually chosen title.
-	m.saveConv()
+	m.saveSession()
 	got, _ = session.Load(m.o.Cwd, s.ID)
 	if got.Title != "Deployment checks" {
 		t.Fatal("autosave replaced manual title")
@@ -53,12 +53,12 @@ func TestSessionManagementLifecycle(t *testing.T) {
 	m.running = true
 	m.setSessionState(s.ID, session.Archived)
 	got, _ = session.Load(m.o.Cwd, s.ID)
-	if got.State != "" || m.conv == nil {
+	if got.State != "" || m.session == nil {
 		t.Fatal("management must not change a running session")
 	}
 	m.running = false
 	m.setSessionState(s.ID, session.Archived)
-	if m.conv != nil || len(m.sess.Agent.Messages()) != 0 {
+	if m.session != nil || len(m.connection.Agent.Messages()) != 0 {
 		t.Fatal("archived current session still attached")
 	}
 	if list, _ := session.List(m.o.Cwd); len(list) != 0 {
@@ -71,7 +71,7 @@ func TestSessionManagementLifecycle(t *testing.T) {
 		t.Fatalf("archive missing: %+v", list)
 	}
 	m.resume(s.ID)
-	if m.conv != nil {
+	if m.session != nil {
 		t.Fatal("direct resume must require restore")
 	}
 	m.setSessionState(s.ID, "")
@@ -84,7 +84,7 @@ func TestSessionManagementLifecycle(t *testing.T) {
 	}
 	m.confirmSessionDelete(s.ID, false)
 	typeKeys(m, "down", "enter")
-	if m.conv != nil {
+	if m.session != nil {
 		t.Fatal("trashed session still attached")
 	}
 	got, _ = session.Load(m.o.Cwd, s.ID)
@@ -174,7 +174,7 @@ func TestAITitlePreviewAndCancellation(t *testing.T) {
 	h := fakeAgentModel(t, lm, 10000)
 	s := savedManagedSession(t, h.model)
 	h.resume(s.ID)
-	before := h.sess.Agent.Messages()
+	before := h.connection.Agent.Messages()
 	h.confirmTitleGeneration(s.ID)
 	if len(lm.titleRequests) != 0 {
 		t.Fatal("opening confirmation called model")
@@ -184,7 +184,7 @@ func TestAITitlePreviewAndCancellation(t *testing.T) {
 		t.Fatal("missing title preview")
 	}
 	got, _ := session.Load(h.o.Cwd, s.ID)
-	if got.Title != s.Title || !reflect.DeepEqual(before, h.sess.Agent.Messages()) || h.lastInput != 730 {
+	if got.Title != s.Title || !reflect.DeepEqual(before, h.connection.Agent.Messages()) || h.lastInput != 730 {
 		t.Fatal("suggestion changed conversation or title before acceptance")
 	}
 	if len(lm.titleRequests) != 1 || len(lm.titleRequests[0]["messages"].([]any)) != 2 {
@@ -280,7 +280,7 @@ func TestAutomaticSessionTitle(t *testing.T) {
 			lm := &fakeLM{script: []string{streamText("First answer", 70), streamText("Second answer", 90)}, titles: []string{titleStream}}
 			h := fakeAgentModel(t, lm, 10000)
 			cmd := h.submit("Could you investigate deployment approval checks?", nil)
-			fallback := h.conv.Title
+			fallback := h.session.Title
 			if fallback != "Could you investigate deployment approval checks?" || len(lm.titleRequests) != 0 {
 				t.Fatal("missing immediate fallback or naming started before the answer")
 			}
@@ -289,8 +289,8 @@ func TestAutomaticSessionTitle(t *testing.T) {
 			if failed {
 				want, state = fallback, session.TitleFallback
 			}
-			got, err := session.Load(h.o.Cwd, h.conv.ID)
-			if err != nil || got.Title != want || got.TitleState != state || h.conv.Title != want || h.running || h.pal != nil {
+			got, err := session.Load(h.o.Cwd, h.session.ID)
+			if err != nil || got.Title != want || got.TitleState != state || h.session.Title != want || h.running || h.pal != nil {
 				t.Fatalf("automatic title did not settle: session=%+v err=%v", got, err)
 			}
 			if len(got.Messages) != 2 || got.LastInput != 70 || got.UsageIn != 70 || got.UsageOut != 5 {
@@ -302,7 +302,7 @@ func TestAutomaticSessionTitle(t *testing.T) {
 			// Resume and another turn neither rename nor retry a failed title.
 			h.resume(got.ID)
 			h.drive(h.submit("Continue with the second check", nil))
-			if h.conv.Title != want || len(lm.titleRequests) != 1 || len(h.sess.Agent.Messages()) != 4 {
+			if h.session.Title != want || len(lm.titleRequests) != 1 || len(h.connection.Agent.Messages()) != 4 {
 				t.Fatal("subsequent turn repeated naming or corrupted history")
 			}
 		})
@@ -343,7 +343,7 @@ func TestAutomaticTitleLateResult(t *testing.T) {
 					t.Fatal(err)
 				}
 			case "switch":
-				h.newConv()
+				h.resetSession()
 			case "next run":
 				next = h.submit("A follow-up while naming finishes", nil)
 			}
@@ -351,7 +351,7 @@ func TestAutomaticTitleLateResult(t *testing.T) {
 				h.Update(msg)
 			}
 			if scenario == "next run" {
-				if h.conv.Title != s.Title {
+				if h.session.Title != s.Title {
 					t.Fatal("title was saved while the run owned persistence")
 				}
 				h.drive(next)
@@ -373,7 +373,7 @@ func TestAutomaticTitleLateResult(t *testing.T) {
 			case "external rename":
 				want = "Name from another process"
 			}
-			if got.Title != want || (scenario == "switch" && h.conv != nil) || (scenario == "legacy" && len(lm.titleRequests) != 0) {
+			if got.Title != want || (scenario == "switch" && h.session != nil) || (scenario == "legacy" && len(lm.titleRequests) != 0) {
 				t.Fatalf("late result violated title ownership: %+v", got)
 			}
 			if scenario == "next run" && (len(got.Messages) != len(s.Messages)+2 || got.LastInput != 81 || strings.Contains(transcript(h.model), "could not save")) {
@@ -393,7 +393,7 @@ func TestGeneratedTitleCompletion(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := fakeAgentModel(t, &fakeLM{titles: []string{tc.response}}, 10000)
-			got, _, err := generateTitle(t.Context(), h.sess.Agent.Model, "user: Check deployment")
+			got, _, err := generateTitle(t.Context(), h.connection.Agent.Model, "user: Check deployment")
 			if got != tc.want || (err != nil) != (tc.want == "") {
 				t.Fatalf("title=%q err=%v, want %q", got, err, tc.want)
 			}

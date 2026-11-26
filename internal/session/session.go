@@ -1,7 +1,7 @@
-// Package session persists conversations on disk so they can be resumed.
+// Package session persists sessions on disk so they can be resumed.
 //
 // Layout: <config dir>/sessions/<cwd hash>/<id>.json, one file per
-// conversation, grouped by the directory arkex was started in. Files are
+// session, grouped by the directory arkex was started in. Files are
 // mode 0600 because messages can carry file contents and command output.
 package session
 
@@ -27,7 +27,7 @@ import (
 	"github.com/attrition-tech/arkex/internal/fileutil"
 )
 
-// Session is one conversation and the state needed to continue it.
+// Session is saved message history and the state needed to resume work.
 type Session struct {
 	ID            string             `json:"id"`
 	Cwd           string             `json:"cwd"`
@@ -107,14 +107,14 @@ func New(cwd string) *Session {
 	}
 }
 
-// Usage is the model and cumulative token usage saved with a conversation.
+// Usage is the model and cumulative token usage saved with a session.
 type Usage struct {
 	Model  string
 	Input  int64
 	Output int64
 }
 
-// Update records the conversation state and refreshes the title and time.
+// Update records the session state and refreshes the title and time.
 func (s *Session) Update(msgs []fantasy.Message, usage Usage) {
 	s.syncContext(msgs)
 	s.Messages = msgs

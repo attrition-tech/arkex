@@ -172,7 +172,7 @@ func (m *model) inboxCommand(input session.PendingInput, action string) tea.Cmd 
 }
 
 func (m *model) enqueueDraft(steer bool) tea.Cmd {
-	if m.sess.Agent == nil {
+	if m.connection.Agent == nil {
 		m.openModels(m.o.StartupNote)
 		return nil
 	}
@@ -188,7 +188,7 @@ func (m *model) enqueueDraft(steer bool) tea.Cmd {
 		send = "(see the attached image)"
 	}
 	input := session.PendingInput{ID: rand.Text(), Text: text,
-		Message: fantasy.NewUserMessage(send, m.fileParts()...), Model: m.sess.Name,
+		Message: fantasy.NewUserMessage(send, m.fileParts()...), Model: m.connection.Name,
 		Steer: steer && m.running}
 	return m.inboxCommand(input, "add")
 }
@@ -211,7 +211,7 @@ func (m *model) inboxDone(msg inboxDoneMsg) tea.Cmd {
 				}
 			}
 		}
-		stillPending := m.conv != nil && slices.ContainsFunc(m.conv.Pending, func(input session.PendingInput) bool { return input.ID == msg.input.ID })
+		stillPending := m.session != nil && slices.ContainsFunc(m.session.Pending, func(input session.PendingInput) bool { return input.ID == msg.input.ID })
 		if stillPending && (msg.action == "add" || msg.action == "steer") {
 			if msg.input.Steer {
 				m.flash("Steering saved · applies after the current step")
@@ -251,20 +251,20 @@ func (m *model) inboxDone(msg inboxDoneMsg) tea.Cmd {
 }
 
 func (m *model) startQueued(resume bool) tea.Cmd {
-	if m.running || m.inboxSaving || m.inboxReplaying || m.conv == nil || len(m.conv.Pending) == 0 || m.sess.Agent == nil {
+	if m.running || m.inboxSaving || m.inboxReplaying || m.session == nil || len(m.session.Pending) == 0 || m.connection.Agent == nil {
 		return nil
 	}
-	if m.conv.QueuePaused && !resume {
+	if m.session.QueuePaused && !resume {
 		return nil
 	}
-	input := m.conv.Pending[0]
-	if input.Model != m.sess.Name {
-		m.conv.QueuePaused = true
+	input := m.session.Pending[0]
+	if input.Model != m.connection.Name {
+		m.session.QueuePaused = true
 		m.appendSystem("Queue paused: the next message was saved for " + input.Model + ". Switch back to that model before resuming /queue.")
 		m.refresh()
 		return nil
 	}
-	m.conv.QueuePaused = false
+	m.session.QueuePaused = false
 	var persistence *contextPersistence
 	cmd := m.startRun(func(ctx context.Context, ag *agent.Agent, emit func(agent.Event)) error {
 		msg, err := persistence.takeQueued(ctx, ag.Messages(), input.ID)
@@ -297,7 +297,7 @@ func pendingItems(m *model) []paletteItem {
 		m.closePalette()
 		return m.enqueueDraft(false)
 	}}}
-	if m.conv == nil || len(m.conv.Pending) == 0 {
+	if m.session == nil || len(m.session.Pending) == 0 {
 		return append(items, paletteItem{title: "No pending messages"})
 	}
 	if !m.running {
@@ -306,7 +306,7 @@ func pendingItems(m *model) []paletteItem {
 			return m.startQueued(true)
 		}})
 	}
-	for i, input := range m.conv.Pending {
+	for i, input := range m.session.Pending {
 		mode := "Queued"
 		if input.Steer {
 			mode = "Steering pending"

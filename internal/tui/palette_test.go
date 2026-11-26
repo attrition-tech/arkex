@@ -94,6 +94,12 @@ func TestPaletteOpensOnSlashOnlyWhenEmpty(t *testing.T) {
 	if m.pal.level().title != "Commands" || len(m.pal.view) != 7 {
 		t.Fatalf("top level = %q with %d rows", m.pal.level().title, len(m.pal.view))
 	}
+	view := ansi.Strip(m.View().Content)
+	for _, label := range []string{"New session", "/new", "Resume session", "Pending messages"} {
+		if !strings.Contains(view, label) {
+			t.Fatalf("palette missing %q:\n%s", label, view)
+		}
+	}
 	typeKeys(m, "esc")
 	if m.pal != nil {
 		t.Fatal("esc must close the palette")
@@ -105,6 +111,17 @@ func TestPaletteOpensOnSlashOnlyWhenEmpty(t *testing.T) {
 	typeKeys(m, "ctrl+p")
 	if m.pal != nil {
 		t.Fatal("ctrl+p again must close it")
+	}
+	for _, query := range []string{"new", "clear"} {
+		typeKeys(m, "/")
+		for _, r := range query {
+			typeKeys(m, string(r))
+		}
+		view := ansi.Strip(m.View().Content)
+		if !strings.Contains(view, "New session") || !strings.Contains(view, "/new") {
+			t.Fatalf("%q must find the canonical New session action:\n%s", query, view)
+		}
+		typeKeys(m, "esc")
 	}
 }
 

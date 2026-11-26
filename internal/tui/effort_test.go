@@ -31,81 +31,81 @@ func effortModel(t *testing.T) *model {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.sess = Connection{Name: ref.String(), Agent: &agent.Agent{Model: lm}}
+	m.connection = Connection{Name: ref.String(), Agent: &agent.Agent{Model: lm}}
 	m.layout()
 	return m
 }
 
 func TestEffortSelectionAndResume(t *testing.T) {
 	m := effortModel(t)
-	m.sess.Agent.SetMessages([]fantasy.Message{fantasy.NewUserMessage("keep this conversation")})
-	m.conv = session.New(m.o.Cwd)
+	m.connection.Agent.SetMessages([]fantasy.Message{fantasy.NewUserMessage("keep this conversation")})
+	m.session = session.New(m.o.Cwd)
 	m.setEffort("xhigh")
-	if m.sess.Agent.Model.Ref.Thinking != "xhigh" || len(m.sess.Agent.Messages()) != 1 {
+	if m.connection.Agent.Model.Ref.Thinking != "xhigh" || len(m.connection.Agent.Messages()) != 1 {
 		t.Fatal("selection reset conversation")
 	}
-	saved, err := session.Load(m.o.Cwd, m.conv.ID)
+	saved, err := session.Load(m.o.Cwd, m.session.ID)
 	if err != nil || saved.Effort == nil || *saved.Effort != "xhigh" {
 		t.Fatalf("selection not saved: %v", err)
 	}
 	m.running = true
 	m.setEffort("low")
-	if m.sess.Agent.Model.Ref.Thinking != "xhigh" {
+	if m.connection.Agent.Model.Ref.Thinking != "xhigh" {
 		t.Fatal("changed in-flight options")
 	}
 	m.running = false
 	m.setEffort("off")
-	if m.sess.Agent.Model.Ref.Thinking != "xhigh" {
+	if m.connection.Agent.Model.Ref.Thinking != "xhigh" {
 		t.Fatal("unsupported off accepted")
 	}
-	if err := m.sess.Agent.Model.SetThinking("low"); err != nil {
+	if err := m.connection.Agent.Model.SetThinking("low"); err != nil {
 		t.Fatal(err)
 	}
 	m.resume(saved.ID)
-	if m.sess.Agent.Model.Ref.Thinking != "xhigh" {
+	if m.connection.Agent.Model.Ref.Thinking != "xhigh" {
 		t.Fatal("resume lost effort")
 	}
 	m.setEffort("default")
-	saved, err = session.Load(m.o.Cwd, m.conv.ID)
+	saved, err = session.Load(m.o.Cwd, m.session.ID)
 	if err != nil || saved.Effort == nil || *saved.Effort != "" {
 		t.Fatal("Default not persisted distinctly from legacy")
 	}
-	if err := m.sess.Agent.Model.SetThinking("high"); err != nil {
+	if err := m.connection.Agent.Model.SetThinking("high"); err != nil {
 		t.Fatal(err)
 	}
 	m.resume(saved.ID)
-	if m.sess.Agent.Model.Ref.Thinking != "" {
+	if m.connection.Agent.Model.Ref.Thinking != "" {
 		t.Fatal("Default did not restore")
 	}
 }
 
 func TestEffortResumeModelBoundaries(t *testing.T) {
 	m := effortModel(t)
-	m.sess.Agent.Model.Ref.Model.ID = "custom:model"
-	m.sess.Agent.Model.Ref.Model.ReasoningLevels = []string{"low", "high"}
-	m.conv = session.New(m.o.Cwd)
-	m.sess.Agent.SetMessages([]fantasy.Message{fantasy.NewUserMessage("saved history")})
+	m.connection.Agent.Model.Ref.Model.ID = "custom:model"
+	m.connection.Agent.Model.Ref.Model.ReasoningLevels = []string{"low", "high"}
+	m.session = session.New(m.o.Cwd)
+	m.connection.Agent.SetMessages([]fantasy.Message{fantasy.NewUserMessage("saved history")})
 	m.setEffort("high")
-	id := m.conv.ID
-	if err := m.sess.Agent.Model.SetThinking("low"); err != nil {
+	id := m.session.ID
+	if err := m.connection.Agent.Model.SetThinking("low"); err != nil {
 		t.Fatal(err)
 	}
 	m.resume(id)
-	if m.sess.Agent.Model.Ref.Thinking != "high" {
+	if m.connection.Agent.Model.Ref.Thinking != "high" {
 		t.Fatal("colon in model ID prevented restore")
 	}
-	m.sess.Agent.Model.Ref.Model.ID = "different:model"
-	if err := m.sess.Agent.Model.SetThinking("low"); err != nil {
+	m.connection.Agent.Model.Ref.Model.ID = "different:model"
+	if err := m.connection.Agent.Model.SetThinking("low"); err != nil {
 		t.Fatal(err)
 	}
 	m.resume(id)
-	if m.sess.Agent.Model.Ref.Thinking != "low" {
+	if m.connection.Agent.Model.Ref.Thinking != "low" {
 		t.Fatal("restored effort onto a different model")
 	}
-	m.sess.Agent.Model.Ref.Model.ID = "custom:model"
-	m.sess.Agent.Model.Ref.Model.ReasoningLevels = []string{"low"}
+	m.connection.Agent.Model.Ref.Model.ID = "custom:model"
+	m.connection.Agent.Model.Ref.Model.ReasoningLevels = []string{"low"}
 	m.resume(id)
-	if m.sess.Agent.Model.Ref.Thinking != "low" || m.pal == nil {
+	if m.connection.Agent.Model.Ref.Thinking != "low" || m.pal == nil {
 		t.Fatal("unavailable saved effort must ask rather than silently reset")
 	}
 }
@@ -118,22 +118,22 @@ func TestEffortMenuAndVisibilityAreSeparate(t *testing.T) {
 	}
 	m.openPaletteSub("Reasoning effort", items)
 	typeKeys(m, "down", "enter")
-	if m.sess.Agent.Model.Ref.Thinking != "low" || m.pal != nil {
+	if m.connection.Agent.Model.Ref.Thinking != "low" || m.pal != nil {
 		t.Fatal("keyboard selection failed")
 	}
 	reasoning := newBlock(blockReasoning, "Consider the alternatives.")
 	m.blocks = append(m.blocks, reasoning)
 	m.toggleDetail(reasoning)
-	if m.openDetail != reasoning || m.sess.Agent.Model.Ref.Thinking != "low" {
+	if m.openDetail != reasoning || m.connection.Agent.Model.Ref.Thinking != "low" {
 		t.Fatal("display toggle changed inference")
 	}
-	m.sess.Agent.Model.Ref.Conn.BaseURL = "http://localhost:1/v1"
-	m.sess.Agent.Model.Ref.Model.ReasoningLevels = nil
-	m.sess.Agent.Model.Ref.Conn.Compat.Thinking = config.ThinkingQwen
+	m.connection.Agent.Model.Ref.Conn.BaseURL = "http://localhost:1/v1"
+	m.connection.Agent.Model.Ref.Model.ReasoningLevels = nil
+	m.connection.Agent.Model.Ref.Conn.Compat.Thinking = config.ThinkingQwen
 	if got := titles(effortItems(m)); got != "Default|Off|On|Check reasoning…" {
 		t.Fatal(got)
 	}
-	m.sess.Agent.Model.Ref.Conn.Compat.Thinking = ""
+	m.connection.Agent.Model.Ref.Conn.Compat.Thinking = ""
 	items = effortItems(m)
 	if len(items) != 2 || !strings.Contains(items[0].detail, "not advertised") {
 		t.Fatal("unknown model offered fake controls")
@@ -189,17 +189,17 @@ func TestReasoningCheckPreviewApplyAndCancellation(t *testing.T) {
 		_, _ = fmt.Fprint(w, `{"choices":[{"message":{"content":"OK"},"finish_reason":"stop"}]}`)
 	}))
 	defer server.Close()
-	mdl := m.sess.Agent.Model
+	mdl := m.connection.Agent.Model
 	mdl.Ref.Conn.BaseURL = server.URL + "/v1"
 	mdl.Ref.Conn.Models = []config.Model{mdl.Ref.Model, {ID: "sibling", ReasoningLevels: []string{"high"}}}
 	m.o.ConfigPath, _ = config.GlobalPath()
 	if err := config.SaveConnection(m.o.ConfigPath, "custom", mdl.Ref.Conn, "custom/sibling"); err != nil {
 		t.Fatal(err)
 	}
-	m.sess.Agent.SetMessages([]fantasy.Message{fantasy.NewUserMessage("PRIVATE CONVERSATION")})
-	m.conv = session.New(m.o.Cwd)
+	m.connection.Agent.SetMessages([]fantasy.Message{fantasy.NewUserMessage("PRIVATE CONVERSATION")})
+	m.session = session.New(m.o.Cwd)
 	m.setEffort("high")
-	beforeHistory, beforeRef := m.sess.Agent.Messages(), mdl.Ref
+	beforeHistory, beforeRef := m.connection.Agent.Messages(), mdl.Ref
 	beforeConfig, _ := os.ReadFile(m.o.ConfigPath)
 	h := &harness{model: m}
 	m.command("/effort")
@@ -221,7 +221,7 @@ func TestReasoningCheckPreviewApplyAndCancellation(t *testing.T) {
 		t.Fatal("missing check preview")
 	}
 	unchanged, _ := os.ReadFile(m.o.ConfigPath)
-	if !slices.Equal(beforeConfig, unchanged) || !reflect.DeepEqual(mdl.Ref, beforeRef) || !reflect.DeepEqual(beforeHistory, m.sess.Agent.Messages()) {
+	if !slices.Equal(beforeConfig, unchanged) || !reflect.DeepEqual(mdl.Ref, beforeRef) || !reflect.DeepEqual(beforeHistory, m.connection.Agent.Messages()) {
 		t.Fatal("preview changed config, current effort or history")
 	}
 	for _, width := range []int{120, 60, 40} {
@@ -238,7 +238,7 @@ func TestReasoningCheckPreviewApplyAndCancellation(t *testing.T) {
 	if !got.ReasoningChecked || !slices.Equal(got.ReasoningLevels, []string{"low", "max"}) || cfg.Default != "custom/sibling" || !reflect.DeepEqual(cfg.Connections["custom"].Models[1], beforeRef.Conn.Models[1]) {
 		t.Fatalf("wrong saved capabilities or sibling/default changed: %+v", cfg)
 	}
-	if mdl.Ref.Thinking != "" || !reflect.DeepEqual(beforeHistory, m.sess.Agent.Messages()) || !strings.Contains(effortItems(m)[0].detail, "accepted by server") {
+	if mdl.Ref.Thinking != "" || !reflect.DeepEqual(beforeHistory, m.connection.Agent.Messages()) || !strings.Contains(effortItems(m)[0].detail, "accepted by server") {
 		t.Fatal("apply changed history or misrepresented capabilities")
 	}
 	typeKeys(m, "down", "enter")

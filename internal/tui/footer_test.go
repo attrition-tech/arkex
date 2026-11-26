@@ -42,13 +42,13 @@ func TestHumanTokens(t *testing.T) {
 func footerModel(t *testing.T) *model {
 	m, _ := testModel(t)
 	m.o.Connect = nil
-	m.sess.Name = "local/deepseek-v4-flash"
+	m.connection.Name = "local/deepseek-v4-flash"
 	lm, err := provider.Open(t.Context(), config.ModelRef{ConnID: "local", Conn: config.Connection{API: config.APIOpenAICompat, BaseURL: "http://localhost:1/v1"}, Model: config.Model{ID: "deepseek-v4-flash"}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.sess.Agent = &agent.Agent{Model: lm}
-	m.sess.Agent.SetContextWindow(1000)
+	m.connection.Agent = &agent.Agent{Model: lm}
+	m.connection.Agent.SetContextWindow(1000)
 	m.lastInput = 450
 	m.usageIn, m.usageOut = 42, 7
 	m.appendSystem("Conversation toolbar fixture")
@@ -94,17 +94,17 @@ func TestToolbarHitsMatchRenderedPills(t *testing.T) {
 
 func TestToolbarEffortIsNotDuplicated(t *testing.T) {
 	m := footerModel(t)
-	m.sess.Name = "local/model:variant:high"
-	m.sess.Agent.Model.Ref.Thinking = "high"
+	m.connection.Name = "local/model:variant:high"
+	m.connection.Agent.Model.Ref.Thinking = "high"
 	line := ansi.Strip(m.footer())
 	if !strings.Contains(line, "model:variant ▾") || !strings.Contains(line, "Effort: High ▾") || strings.Contains(line, "variant:high") {
 		t.Fatalf("duplicate effort or damaged model ID: %q", line)
 	}
-	if m.sess.Name != "local/model:variant:high" {
-		t.Fatal("display change mutated session identity")
+	if m.connection.Name != "local/model:variant:high" {
+		t.Fatal("display change mutated model identity")
 	}
-	m.sess.Name = "local/model:high"
-	m.sess.Agent.Model.Ref.Thinking = ""
+	m.connection.Name = "local/model:high"
+	m.connection.Agent.Model.Ref.Thinking = ""
 	if line := ansi.Strip(m.footer()); !strings.Contains(line, "model:high ▾") {
 		t.Fatalf("stripped a model ID suffix without an effort override: %q", line)
 	}
@@ -140,7 +140,7 @@ func TestStatsWarnFromCompactionThreshold(t *testing.T) {
 	if f := m.View().Content; !strings.Contains(f, gaugeWarnStyle.Render("800 / 1000 · 80%")) {
 		t.Fatalf("80%% must warn in amber: %q", ansi.Strip(f))
 	}
-	m.sess.Agent.SetContextWindow(0)
+	m.connection.Agent.SetContextWindow(0)
 	if f := ansi.Strip(m.View().Content); !strings.Contains(f, "Limit assumed") || !strings.Contains(f, "262144 · 0%") {
 		t.Fatalf("unknown window: %q", f)
 	}
@@ -172,7 +172,7 @@ func TestToolbarPreservesEffortWhenNarrow(t *testing.T) {
 
 func TestLongModelNameDropsConnectionPrefix(t *testing.T) {
 	m := footerModel(t)
-	m.sess.Name = "my-long-connection/Qwen3.8-Flash-Next-FP8"
+	m.connection.Name = "my-long-connection/Qwen3.8-Flash-Next-FP8"
 	if f := ansi.Strip(m.footer()); strings.Contains(f, "my-long-connection/") || !strings.Contains(f, "Qwen3.8-Flash-Next-FP8 ▾") {
 		t.Fatalf("footer = %q", f)
 	}
@@ -180,7 +180,7 @@ func TestLongModelNameDropsConnectionPrefix(t *testing.T) {
 
 func TestCompactToolbarPreservesEffortAndHitBounds(t *testing.T) {
 	m := footerModel(t)
-	m.sess.Name = "connection/" + strings.Repeat("long-model-", 8)
+	m.connection.Name = "connection/" + strings.Repeat("long-model-", 8)
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
 	line := ansi.Strip(strings.Split(m.footer(), "\n")[0])
 	if !strings.Contains(line, "Effort: Default ▾") || !strings.Contains(line, "… ▾") {

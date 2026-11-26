@@ -66,7 +66,7 @@ with tempfile.TemporaryDirectory(prefix="arkex-policy-") as temp:
         # Start a fresh transcript so stale results cannot satisfy the wait.
         tmux("send-keys", "-t", "test", "-l", "/new")
         tmux("send-keys", "-t", "test", "Enter")
-        wait(lambda s: "RESULT:" not in s and "Ask a question, describe a task" in s, "new conversation")
+        wait(lambda s: "RESULT:" not in s and "Ask a question, describe a task" in s, "new session")
         time.sleep(.2)
         prompt = "workspace-test " + json.dumps({"name": name, "args": args})
         tmux("send-keys", "-t", "test", "-l", prompt)

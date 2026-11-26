@@ -59,9 +59,9 @@ func (m *model) toolbarY() int { return m.vp.Height() + m.boxRows() }
 func (m *model) statusY() int  { return m.toolbarY() + 1 }
 
 func (m *model) footer() string {
-	name := m.sess.Name
-	if m.sess.Agent != nil && m.sess.Agent.Model != nil && m.sess.Agent.Model.Ref.Thinking != "" {
-		name = strings.TrimSuffix(name, ":"+m.sess.Agent.Model.Ref.Thinking)
+	name := m.connection.Name
+	if m.connection.Agent != nil && m.connection.Agent.Model != nil && m.connection.Agent.Model.Ref.Thinking != "" {
+		name = strings.TrimSuffix(name, ":"+m.connection.Agent.Model.Ref.Thinking)
 	}
 	key := footerKey{
 		status: m.status, name: name, running: m.running, paused: m.paused,
@@ -71,15 +71,15 @@ func (m *model) footer() string {
 		messageFocus: m.promptFocus != nil,
 		link:         m.hoveredLink(),
 	}
-	if m.conv != nil {
+	if m.session != nil {
 		steers := 0
-		for _, input := range m.conv.Pending {
+		for _, input := range m.session.Pending {
 			if input.Steer {
 				steers++
 			}
 		}
-		if n := len(m.conv.Pending); n > 0 {
-			if m.conv.QueuePaused {
+		if n := len(m.session.Pending); n > 0 {
+			if m.session.QueuePaused {
 				key.inbox = fmt.Sprintf("Paused pending: %d · /queue", n)
 			} else {
 				key.inbox = fmt.Sprintf("Steering pending: %d · Queued: %d · /queue", steers, n-steers)
@@ -113,12 +113,12 @@ func (m *model) statusBar() string {
 	return line
 }
 
-// convTitle supplies the session name for the terminal window title.
-func (m *model) convTitle() string {
-	if m.conv == nil {
+// sessionTitle supplies the session name for the terminal window title.
+func (m *model) sessionTitle() string {
+	if m.session == nil {
 		return ""
 	}
-	return m.conv.Title
+	return m.session.Title
 }
 
 // Reserve room for effort before truncating the model. Hit ranges cover
@@ -213,7 +213,7 @@ func (m *model) footerClick(x, y int) (tea.Cmd, bool) {
 	}
 	switch m.footerHitAt(x) {
 	case actModel:
-		if m.sess.Agent == nil {
+		if m.connection.Agent == nil {
 			m.openModels("")
 			return nil, true
 		}

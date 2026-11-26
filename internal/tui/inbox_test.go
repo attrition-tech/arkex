@@ -104,7 +104,7 @@ func TestSteeringAndQueuePreserveTurnsAndAttachments(t *testing.T) {
 			// Keep forwarded Cmd+Enter working for existing terminal overrides.
 			_, cmd = h.Update(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModSuper})
 			h.drive(cmd)
-			saved, err := session.Load(h.o.Cwd, h.conv.ID)
+			saved, err := session.Load(h.o.Cwd, h.session.ID)
 			if err != nil || len(saved.Pending) != 4 || len(saved.Messages) != 1 || !saved.RunPending {
 				t.Fatalf("admission was not durable and separate from history: %+v %v", saved, err)
 			}
@@ -136,7 +136,7 @@ func TestSteeringAndQueuePreserveTurnsAndAttachments(t *testing.T) {
 					t.Fatal("queued file or image snapshot lost", wire)
 				}
 			}
-			saved, err = session.Load(h.o.Cwd, h.conv.ID)
+			saved, err = session.Load(h.o.Cwd, h.session.ID)
 			if err != nil || len(saved.Pending) != 0 || saved.RunPending || len(saved.Prompts) != 5 {
 				t.Fatalf("delivery/checkpoints not committed: %+v %v", saved, err)
 			}
@@ -165,7 +165,7 @@ func TestPendingSurvivesStopPauseAndRestart(t *testing.T) {
 			lm := &fakeLM{script: []string{streamToolCall("once", "a.txt"), streamText("Resumed queue", 20)}}
 			started, release := holdInboxResponse(t, lm)
 			h := fakeAgentModel(t, lm, 100000)
-			h.sess.Agent.MaxSteps = 1
+			h.connection.Agent.MaxSteps = 1
 			done := inboxRun(h, h.submit("First task", nil))
 			waitInbox(t, started)
 			h.setInput("Preserve this steer")
@@ -176,11 +176,11 @@ func TestPendingSurvivesStopPauseAndRestart(t *testing.T) {
 			}
 			release()
 			finishInboxRun(t, h, done)
-			saved, err := session.Load(h.o.Cwd, h.conv.ID)
+			saved, err := session.Load(h.o.Cwd, h.session.ID)
 			if err != nil || !saved.QueuePaused || len(saved.Pending) != 1 || saved.Pending[0].Steer || len(lm.requests) != 1 {
 				t.Fatalf("pending work ran after stopping: %+v %v", saved, err)
 			}
-			h.loadConversation(saved)
+			h.loadSession(saved)
 			h.drive(h.startQueued(false))
 			if h.running || len(lm.requests) != 1 || !strings.Contains(h.statusBar(), "Paused pending: 1") {
 				t.Fatal("restart silently dispatched work")
@@ -190,7 +190,7 @@ func TestPendingSurvivesStopPauseAndRestart(t *testing.T) {
 				t.Fatal("restart recovery instructions must remain visible in the transcript", shown)
 			}
 			h.drive(h.startQueued(true))
-			if len(lm.requests) != 2 || len(h.conv.Pending) != 0 || h.conv.RunPending {
+			if len(lm.requests) != 2 || len(h.session.Pending) != 0 || h.session.RunPending {
 				t.Fatal("explicit resume failed")
 			}
 		})
@@ -206,14 +206,14 @@ func TestLateSteerAndSaveConflict(t *testing.T) {
 	h.setInput("Late steer")
 	_, cmd := h.Update(key("enter"))
 	h.drive(cmd)
-	if len(h.conv.Pending) != 1 || h.conv.Pending[0].Steer {
+	if len(h.session.Pending) != 1 || h.session.Pending[0].Steer {
 		t.Fatal("late input silently steered a completed run")
 	}
 	h.command("/queue")
 	for _, msg := range finished {
 		h.drive(func() tea.Msg { return msg })
 	}
-	if len(lm.requests) != 2 || len(h.conv.Pending) != 0 {
+	if len(lm.requests) != 2 || len(h.session.Pending) != 0 {
 		t.Fatal("late input disappeared instead of starting a new turn")
 	}
 	if !strings.Contains(h.View().Content, "No pending messages") || strings.Contains(h.View().Content, "1. Late steer") {
@@ -221,13 +221,13 @@ func TestLateSteerAndSaveConflict(t *testing.T) {
 	}
 	h.closePalette()
 	// Preserve an existing pending entry and the new draft on a CAS conflict.
-	h.conv.QueuePaused = true
+	h.session.QueuePaused = true
 	h.setInput("Saved pending")
 	_, cmd = h.Update(queueKey())
 	h.drive(cmd)
 	h.setInput("Must stay in composer")
 	_, cmd = h.Update(queueKey())
-	external, err := session.Load(h.o.Cwd, h.conv.ID)
+	external, err := session.Load(h.o.Cwd, h.session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestLateSteerAndSaveConflict(t *testing.T) {
 	if h.input.Value() != "Must stay in composer" || !strings.Contains(transcript(h.model), "Message not saved:") {
 		t.Fatal("failed admission consumed the draft")
 	}
-	saved, err := session.Load(h.o.Cwd, h.conv.ID)
+	saved, err := session.Load(h.o.Cwd, h.session.ID)
 	if err != nil || saved.Title != external.Title || len(saved.Pending) != 1 || saved.Pending[0].Text != "Saved pending" {
 		t.Fatal("conflict overwrote persisted work", err)
 	}
@@ -257,13 +257,13 @@ func TestPendingControlsAndModelBinding(t *testing.T) {
 	if err := s.Save(); err != nil {
 		t.Fatal(err)
 	}
-	h.loadConversation(s)
-	h.sess.Name = "other/m"
+	h.loadSession(s)
+	h.connection.Name = "other/m"
 	h.drive(h.startQueued(true))
-	if len(lm.requests) != 0 || len(h.conv.Pending) != 2 || !strings.Contains(transcript(h.model), "saved for fake/m") {
+	if len(lm.requests) != 0 || len(h.session.Pending) != 2 || !strings.Contains(transcript(h.model), "saved for fake/m") {
 		t.Fatal("queue changed provider without permission")
 	}
-	h.sess.Name = "fake/m"
+	h.connection.Name = "fake/m"
 	choose := func(title string) {
 		t.Helper()
 		for i, item := range h.pal.view {
@@ -307,7 +307,7 @@ func TestTypingDuringAdmissionCannotAnswerNewApproval(t *testing.T) {
 	if len(reply) != 0 || h.pending == nil {
 		t.Fatal("deferred composer Enter answered a newly arriving approval")
 	}
-	saved, err := session.Load(h.o.Cwd, h.conv.ID)
+	saved, err := session.Load(h.o.Cwd, h.session.ID)
 	if err != nil || len(saved.Pending) != 2 || saved.Pending[1].Text != "Second steer" {
 		t.Fatal("typing was lost while displaying the approval", err)
 	}

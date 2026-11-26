@@ -17,7 +17,7 @@ import (
 	"github.com/attrition-tech/arkex/internal/tools"
 )
 
-// Agent owns one conversation and drives the model/tool loop.
+// Agent owns active message history and drives the model/tool loop.
 type Agent struct {
 	Model  *provider.Model
 	Tools  *tools.Registry
@@ -54,15 +54,15 @@ type Agent struct {
 // Like Messages, it must only be read after the run has returned.
 func (a *Agent) LastUsage() fantasy.Usage { return a.lastUsage }
 
-// Messages returns the conversation so far (excluding the system prompt).
+// Messages returns the active message history (excluding the system prompt).
 func (a *Agent) Messages() []fantasy.Message { return a.messages }
 
-// SetMessages replaces the conversation, e.g. when resuming a session.
+// SetMessages replaces the active message history, e.g. when resuming a session.
 func (a *Agent) SetMessages(m []fantasy.Message) { a.messages = m }
 
 // PausedError is returned when a run was stopped while the model still
 // wanted to call tools: it repeated itself (Reason says how) or hit an
-// explicit MaxSteps. The conversation is intact: the last tool results are
+// explicit MaxSteps. Message history is intact: the last tool results are
 // recorded, so Continue can pick up where it stopped.
 type PausedError struct {
 	Steps  int

@@ -14,7 +14,7 @@ type sessionConnectedMsg struct {
 	gen   int
 	owner *palette
 	ctx   context.Context
-	saved *session.Session // nil starts a new conversation
+	saved *session.Session // nil starts a new session
 	conn  Connection
 	err   error
 }
@@ -72,11 +72,11 @@ func (m *model) sessionConnected(msg sessionConnectedMsg) tea.Cmd {
 		return m.chooseSessionModel(msg.saved, msg.err)
 	}
 	cmd := m.closePalette()
-	m.setSession(msg.conn)
+	m.setConnection(msg.conn)
 	if msg.saved != nil {
-		m.loadConversation(msg.saved)
+		m.loadSession(msg.saved)
 	} else {
-		m.newConv()
+		m.resetSession()
 		m.replaceTranscript([]*block{m.welcome})
 		m.paused = false
 		m.renderWelcome()
@@ -108,7 +108,7 @@ func (m *model) newSession() tea.Cmd {
 		return m.connectSession(nil, "", false)
 	}
 	// Without a connector, the supplied agent is the only available default.
-	m.newConv()
+	m.resetSession()
 	m.replaceTranscript([]*block{m.welcome})
 	m.paused = false
 	m.refresh()

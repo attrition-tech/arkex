@@ -30,13 +30,13 @@ func TestEditResendActualRequestAfterCompactionAndResume(t *testing.T) {
 	h.attachments = []attachment{{name: "original.png", mediaType: "image/png", data: image}}
 	sendEditTest(h, "discard-target")
 	sendEditTest(h, "later-prompt")
-	originalID := h.conv.ID
+	originalID := h.session.ID
 	h.drive(h.compact())
 	s, err := session.Load(h.o.Cwd, originalID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.loadConversation(s)
+	h.loadSession(s)
 	if len(promptEditItems(h.model)) != 3 {
 		t.Fatal("compacted prompts lost from edit menu")
 	}
@@ -51,12 +51,12 @@ func TestEditResendActualRequestAfterCompactionAndResume(t *testing.T) {
 	h.setInput("replacement-prompt")
 	_, cmd := h.Update(key("enter"))
 	h.drive(cmd)
-	if h.conv.ID != originalID || len(lm.requests) != 4 || h.pal == nil {
+	if h.session.ID != originalID || len(lm.requests) != 4 || h.pal == nil {
 		t.Fatal("sent before confirmation")
 	}
 	h.pal.sel = 1
 	h.drive(h.pal.activate(h.model))
-	if h.conv.ID == originalID || h.conv.ParentID != originalID {
+	if h.session.ID == originalID || h.session.ParentID != originalID {
 		t.Fatal("did not fork")
 	}
 	msgs := lm.requests[4]["messages"]
@@ -75,7 +75,7 @@ func TestEditResendActualRequestAfterCompactionAndResume(t *testing.T) {
 	if err != nil || len(original.Prompts) != 3 {
 		t.Fatalf("original lost: %v", err)
 	}
-	revised, err := session.Load(h.o.Cwd, h.conv.ID)
+	revised, err := session.Load(h.o.Cwd, h.session.ID)
 	if err != nil || len(revised.Prompts) != 2 || revised.Prompts[1].Text != "replacement-prompt" {
 		t.Fatalf("branch not persisted: %v", err)
 	}
@@ -149,7 +149,7 @@ func TestEditWaitsForCancellationAndRejectsSaveConflict(t *testing.T) {
 	if h.editingPrompt == nil || h.editAfterStop != 0 {
 		t.Fatal("edit not resumed after stop")
 	}
-	originalID := h.conv.ID
+	originalID := h.session.ID
 	other, err := session.Load(h.o.Cwd, originalID)
 	if err != nil {
 		t.Fatal(err)
@@ -160,7 +160,7 @@ func TestEditWaitsForCancellationAndRejectsSaveConflict(t *testing.T) {
 	}
 	h.setInput("replacement")
 	h.resendPrompt()
-	if h.conv.ID != originalID || h.editingPrompt == nil || h.input.Value() != "replacement" || h.running {
+	if h.session.ID != originalID || h.editingPrompt == nil || h.input.Value() != "replacement" || h.running {
 		t.Fatal("failed save abandoned original or draft")
 	}
 }
@@ -170,7 +170,7 @@ func TestCancelThenSendRetainsBothPrompts(t *testing.T) {
 	h := fakeAgentModel(t, lm, 100000)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	err := h.sess.Agent.Run(ctx, "cancelled instruction", func(e agent.Event) {
+	err := h.connection.Agent.Run(ctx, "cancelled instruction", func(e agent.Event) {
 		if _, ok := e.(agent.TextDelta); ok {
 			cancel()
 		}
@@ -196,7 +196,7 @@ func TestLegacyRepeatedPromptsMapToDistinctCheckpoints(t *testing.T) {
 	s := session.New(h.o.Cwd)
 	s.Messages = []fantasy.Message{fantasy.NewUserMessage("repeat"), {Role: fantasy.MessageRoleAssistant, Content: []fantasy.MessagePart{fantasy.TextPart{Text: "answer"}}}, fantasy.NewUserMessage("repeat")}
 	s.Model = "fake/m"
-	h.loadConversation(s)
+	h.loadSession(s)
 	var indices []int
 	for _, b := range h.blocks {
 		if b.kind == blockUser {
@@ -209,7 +209,7 @@ func TestLegacyRepeatedPromptsMapToDistinctCheckpoints(t *testing.T) {
 	summary := agent.CompactedMessages("earlier context")
 	legacy := session.New(h.o.Cwd)
 	legacy.Messages = append(summary, fantasy.NewUserMessage("surviving prompt"))
-	h.loadConversation(legacy)
+	h.loadSession(legacy)
 	if len(legacy.Prompts) != 1 {
 		t.Fatal("synthetic summary became editable")
 	}
@@ -222,30 +222,30 @@ func TestRemovePromptAfterCompactionAndResume(t *testing.T) {
 	sendEditTest(h, "keep prompt")
 	sendEditTest(h, "discard prompt")
 	sendEditTest(h, "later prompt")
-	originalID := h.conv.ID
+	originalID := h.session.ID
 	h.drive(h.compact())
 	s, err := session.Load(h.o.Cwd, originalID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.loadConversation(s)
+	h.loadSession(s)
 	h.setInput("unsent draft")
 	h.attachments = []attachment{{name: "draft.png", mediaType: "image/png", data: []byte{8}}}
 	h.confirmPromptRemove(2)
 	h.pal.activate(h.model) // Cancel is the default.
-	if h.conv.ID != originalID || h.input.Value() != "unsent draft" {
+	if h.session.ID != originalID || h.input.Value() != "unsent draft" {
 		t.Fatal("cancel changed conversation or draft")
 	}
 	h.confirmPromptRemove(2)
 	h.pal.sel = 1
 	h.drive(h.pal.activate(h.model))
-	if h.conv.ID == originalID || h.running || len(lm.requests) != 4 {
+	if h.session.ID == originalID || h.running || len(lm.requests) != 4 {
 		t.Fatal("removal must fork without a model call")
 	}
 	if h.input.Value() != "unsent draft" || len(h.attachments) != 1 {
 		t.Fatal("removal lost draft")
 	}
-	branch, err := session.Load(h.o.Cwd, h.conv.ID)
+	branch, err := session.Load(h.o.Cwd, h.session.ID)
 	if err != nil || len(branch.Prompts) != 1 || len(branch.Messages) != 2 {
 		t.Fatalf("branch not saved: %v", err)
 	}
@@ -253,7 +253,7 @@ func TestRemovePromptAfterCompactionAndResume(t *testing.T) {
 	if err != nil || len(original.Prompts) != 3 {
 		t.Fatalf("original changed: %v", err)
 	}
-	h.loadConversation(branch)
+	h.loadSession(branch)
 	sendEditTest(h, "new prompt")
 	wire, _ := json.Marshal(lm.requests[4]["messages"])
 	for _, bad := range []string{"discard", "later", "summary containing"} {
@@ -272,15 +272,15 @@ func TestRemoveFirstPromptStopsBeforeForkAndPersistsEmptyBranch(t *testing.T) {
 	for _, compacting := range []bool{false, true} {
 		h := fakeAgentModel(t, &fakeLM{script: []string{streamText("answer", 20)}}, 100000)
 		sendEditTest(h, "first prompt")
-		originalID := h.conv.ID
+		originalID := h.session.ID
 		h.focusPrompt(true)
 		h.focusPrompt(true)
 		h.Update(tea.KeyPressMsg{Code: tea.KeyDelete})
-		if h.pal == nil || h.conv.ID != originalID {
+		if h.pal == nil || h.session.ID != originalID {
 			t.Fatal("Delete must open confirmation, not remove immediately")
 		}
 		h.pal.activate(h.model)
-		if h.conv.ID != originalID {
+		if h.session.ID != originalID {
 			t.Fatal("default keyboard action must cancel")
 		}
 		h.running, h.compacting = true, compacting
@@ -289,7 +289,7 @@ func TestRemoveFirstPromptStopsBeforeForkAndPersistsEmptyBranch(t *testing.T) {
 		h.confirmPromptRemove(1)
 		h.pal.sel = 1
 		h.pal.activate(h.model)
-		if !cancelled || h.conv.ID != originalID || h.removeOnStop != 1 {
+		if !cancelled || h.session.ID != originalID || h.removeOnStop != 1 {
 			t.Fatal("fork raced active run")
 		}
 		if compacting {
@@ -297,15 +297,15 @@ func TestRemoveFirstPromptStopsBeforeForkAndPersistsEmptyBranch(t *testing.T) {
 		} else {
 			h.Update(runDoneMsg{err: context.Canceled})
 		}
-		if h.running || h.paused || h.conv.ID == originalID || h.removeOnStop != 0 {
+		if h.running || h.paused || h.session.ID == originalID || h.removeOnStop != 0 {
 			t.Fatal("did not finish removal after stopping")
 		}
-		branch, err := session.Load(h.o.Cwd, h.conv.ID)
+		branch, err := session.Load(h.o.Cwd, h.session.ID)
 		if err != nil || len(branch.Messages) != 0 || branch.ParentID != originalID {
 			t.Fatalf("empty branch not persisted: %v", err)
 		}
-		h.loadConversation(branch)
-		if len(h.sess.Agent.Messages()) != 0 || len(h.conv.Prompts) != 0 {
+		h.loadSession(branch)
+		if len(h.connection.Agent.Messages()) != 0 || len(h.session.Prompts) != 0 {
 			t.Fatal("empty branch resurrected removed prompt")
 		}
 	}
@@ -314,7 +314,7 @@ func TestRemoveFirstPromptStopsBeforeForkAndPersistsEmptyBranch(t *testing.T) {
 func TestRemovePromptSaveConflictPreservesSource(t *testing.T) {
 	h := fakeAgentModel(t, &fakeLM{script: []string{streamText("answer", 20)}}, 100000)
 	sendEditTest(h, "original")
-	id := h.conv.ID
+	id := h.session.ID
 	other, err := session.Load(h.o.Cwd, id)
 	if err != nil {
 		t.Fatal(err)
@@ -324,7 +324,7 @@ func TestRemovePromptSaveConflictPreservesSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.removePrompt(1)
-	if h.conv.ID != id || len(h.sess.Agent.Messages()) != 2 {
+	if h.session.ID != id || len(h.connection.Agent.Messages()) != 2 {
 		t.Fatal("failed removal changed active context")
 	}
 	list, err := session.List(h.o.Cwd)

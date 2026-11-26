@@ -96,7 +96,7 @@ func (m *model) statsLines(width int) []string {
 			line(dimStyle.Render(label) + strings.Repeat(" ", gap) + v)
 		}
 	}
-	line(sanitize.Terminal(m.sess.Name))
+	line(sanitize.Terminal(m.connection.Name))
 	limit := m.contextWindow()
 	context := "No request measured"
 	if m.lastInput > 0 && limit > 0 {
@@ -109,13 +109,13 @@ func (m *model) statsLines(width int) []string {
 		context = fmt.Sprintf("— / %d tokens", limit)
 	}
 	value("Context · last request", context)
-	if m.sess.Agent != nil && m.sess.Agent.ContextWindowAssumed() {
+	if m.connection.Agent != nil && m.connection.Agent.ContextWindowAssumed() {
 		line(gaugeWarnStyle.Render("Limit assumed · set contextWindow"))
 	}
 	in, out := m.usageIn, m.usageOut
-	if m.conv != nil {
-		in += m.conv.TitleUsageIn
-		out += m.conv.TitleUsageOut
+	if m.session != nil {
+		in += m.session.TitleUsageIn
+		out += m.session.TitleUsageOut
 	}
 	value("Session input ↑", fmt.Sprint(in))
 	value("Session output ↓", fmt.Sprint(out))

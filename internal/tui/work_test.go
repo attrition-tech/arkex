@@ -177,7 +177,7 @@ func TestCancelledWorkFoldsWithoutHidingCancellation(t *testing.T) {
 	}
 }
 
-func TestWorkRestoredFromSavedConversation(t *testing.T) {
+func TestWorkRestoredFromMessages(t *testing.T) {
 	m, _ := testModel(t)
 	m.blocks = blocksFromMessages([]fantasy.Message{
 		fantasy.NewUserMessage("Check tests"),

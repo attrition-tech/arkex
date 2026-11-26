@@ -15,45 +15,45 @@ import (
 
 const recentSessions = 5
 
-// saveConv persists idle session changes. Runs save through contextPersistence
+// saveSession persists idle session changes. Runs save through contextPersistence
 // on their worker so disk locks cannot freeze the event loop.
-func (m *model) saveConv() {
-	if m.conv == nil || m.sess.Agent == nil {
+func (m *model) saveSession() {
+	if m.session == nil || m.connection.Agent == nil {
 		return
 	}
-	m.conv.Update(m.sess.Agent.Messages(), session.Usage{Model: m.sess.Name, Input: m.usageIn, Output: m.usageOut})
-	m.conv.LastInput = m.lastInput
-	if m.sess.Agent.Model != nil {
-		level := m.sess.Agent.Model.Ref.Thinking
-		m.conv.Effort = &level
+	m.session.Update(m.connection.Agent.Messages(), session.Usage{Model: m.connection.Name, Input: m.usageIn, Output: m.usageOut})
+	m.session.LastInput = m.lastInput
+	if m.connection.Agent.Model != nil {
+		level := m.connection.Agent.Model.Ref.Thinking
+		m.session.Effort = &level
 	}
-	if err := m.conv.Save(); err != nil {
+	if err := m.session.Save(); err != nil {
 		m.appendSystem("could not save the session: " + err.Error())
 	}
 }
 
-// newConv forgets the current conversation (already saved after its last
-// turn) so the next prompt starts a new session file.
-func (m *model) newConv() {
+// resetSession detaches the current session (already saved after its last
+// run) so the next prompt starts a new session file.
+func (m *model) resetSession() {
 	m.cancelPromptEdit()
 	m.dismissStats()
 	m.responseTiming = responseTiming{}
 	m.editAfterStop, m.removeOnStop = 0, 0
 	m.requestTimings, m.runDuration = nil, 0
-	m.conv = nil
+	m.session = nil
 	m.usageIn, m.usageOut, m.lastInput = 0, 0, 0
-	if m.sess.Agent != nil {
-		m.sess.Agent.SetMessages(nil)
+	if m.connection.Agent != nil {
+		m.connection.Agent.SetMessages(nil)
 	}
 	m.start = welcomeScreen{greeting: pickWelcomeGreeting(time.Now())}
 	m.renderWelcome()
 }
 
-// carryConv moves the current conversation into a newly connected agent so
+// carryMessages moves the current messages into a newly connected agent so
 // a model switch continues the same session. Reasoning parts are dropped
 // when the provider changes: providers only accept their own (often
 // signed) reasoning blocks back.
-func (m *model) carryConv(old, next Connection) {
+func (m *model) carryMessages(old, next Connection) {
 	if old.Agent == nil || next.Agent == nil {
 		return
 	}
@@ -137,21 +137,21 @@ func (m *model) resumeWithModel(id, override string) tea.Cmd {
 	if override != "" {
 		return m.connectSession(s, override, false)
 	}
-	if m.o.Connect == nil && m.sess.Agent != nil {
+	if m.o.Connect == nil && m.connection.Agent != nil {
 		// An embedded TUI may supply a single agent without a connector.
 		base := s.Model
 		if s.Effort != nil && *s.Effort != "" {
 			base = strings.TrimSuffix(base, ":"+*s.Effort)
 		}
-		current := m.sess.Name
-		if m.sess.Agent.Model != nil {
-			current = m.sess.Agent.Model.Ref.String()
+		current := m.connection.Name
+		if m.connection.Agent.Model != nil {
+			current = m.connection.Agent.Model.Ref.String()
 		}
 		if base == current {
-			if err := restoreSessionEffort(&m.sess, s); err != nil {
+			if err := restoreSessionEffort(&m.connection, s); err != nil {
 				return m.chooseSessionModel(s, err)
 			}
-			m.loadConversation(s)
+			m.loadSession(s)
 			return nil
 		}
 	}
@@ -161,17 +161,17 @@ func (m *model) resumeWithModel(id, override string) tea.Cmd {
 	return m.connectSession(s, s.Model, true)
 }
 
-func (m *model) loadConversation(s *session.Session) {
+func (m *model) loadSession(s *session.Session) {
 	m.cancelPromptEdit()
 	m.responseTiming = responseTiming{}
 	m.editAfterStop, m.removeOnStop = 0, 0
 	s.ImportCheckpoints(func(text string) bool { _, ok := agent.CompactSummary(text); return ok })
 	m.requestTimings, m.runDuration = nil, 0
 	messages := s.Messages
-	if providerOf(s.Model) != providerOf(m.sess.Name) {
+	if providerOf(s.Model) != providerOf(m.connection.Name) {
 		messages = stripReasoning(messages)
 	}
-	m.sess.Agent.SetMessages(messages)
+	m.connection.Agent.SetMessages(messages)
 	m.replaceTranscript(append([]*block{m.welcome}, blocksFromMessages(s.Messages)...))
 	m.paused = s.RunPending && len(messages) > 0
 	// Restart never resumes external effects or dispatches pending work.
@@ -180,11 +180,11 @@ func (m *model) loadConversation(s *session.Session) {
 		s.Pending[i].Steer = false
 	}
 	m.usageIn, m.usageOut, m.lastInput = s.UsageIn, s.UsageOut, s.LastInput
-	if s.Model != m.sess.Name {
+	if s.Model != m.connection.Name {
 		m.lastInput = 0
 	}
-	m.sess.Agent.RestoreLastInput(m.lastInput)
-	m.conv = s
+	m.connection.Agent.RestoreLastInput(m.lastInput)
+	m.session = s
 	m.bindPromptCheckpoints()
 	note := fmt.Sprintf("resumed %q · %d messages · %s", s.Title, len(s.Messages), session.Age(s.Updated, time.Now()))
 	if len(s.Pending) > 0 {
@@ -193,13 +193,13 @@ func (m *model) loadConversation(s *session.Session) {
 	if s.RunPending {
 		m.appendSystem("Previous work may be incomplete. Review the transcript before /continue; external effects are not replay-safe.")
 	}
-	if s.Model != "" && s.Model != m.sess.Name {
-		note += "\nreplacement model: " + m.sess.Name
+	if s.Model != "" && s.Model != m.connection.Name {
+		note += "\nreplacement model: " + m.connection.Name
 	}
 	m.flash(note)
 	m.stickBottom = true
-	if s.Model != m.sess.Name {
-		m.saveConv()
+	if s.Model != m.connection.Name {
+		m.saveSession()
 	}
 	m.refresh()
 }
@@ -287,7 +287,7 @@ func sessionStateItems(m *model, state string) []paletteItem {
 	var items []paletteItem
 	for _, s := range list {
 		hint := ""
-		if m.conv != nil && s.ID == m.conv.ID {
+		if m.session != nil && s.ID == m.session.ID {
 			hint = "current"
 		}
 		it := paletteItem{group: "Sessions · ctrl+o for actions", title: sanitize.Terminal(s.Title), hint: hint, cmd: "/resume " + s.ID, sessionID: s.ID, detail: sanitize.Terminal(s.Model) + " · " + session.Age(s.Updated, now)}

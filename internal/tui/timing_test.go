@@ -66,7 +66,7 @@ func TestResponseTimingBoundariesAndRetries(t *testing.T) {
 func TestResponseTimingLiveAndCompletedRendering(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, _ := testModel(t)
-		m.setSession(Connection{Agent: &agent.Agent{}})
+		m.setConnection(Connection{Agent: &agent.Agent{}})
 		m.o.Prepare = func(*agent.Agent, string) error { time.Sleep(350 * time.Millisecond); return nil }
 		sentAt := time.Now()
 		m.startRunAt(sentAt, func(context.Context, *agent.Agent, func(agent.Event)) error { return nil })
@@ -155,7 +155,7 @@ func TestTimingPresentation(t *testing.T) {
 	if m.pal == nil || !strings.Contains(panelText(m), "First token 240ms") {
 		t.Fatal("timing command did not open details")
 	}
-	m.newConv()
+	m.resetSession()
 	if len(m.requestTimings) != 0 || m.runDuration != 0 {
 		t.Fatal("new session retained timing")
 	}
@@ -163,8 +163,8 @@ func TestTimingPresentation(t *testing.T) {
 
 func TestTitleDirectoryBudgetAndSanitization(t *testing.T) {
 	m, _ := testModel(t)
-	m.conv = session.New(m.o.Cwd)
-	m.conv.Title = strings.Repeat("界", 40)
+	m.session = session.New(m.o.Cwd)
+	m.session.Title = strings.Repeat("界", 40)
 	m.o.Cwd = "/parent/" + strings.Repeat("界", 20)
 	for _, running := range []bool{false, true} {
 		m.running = running
@@ -173,7 +173,7 @@ func TestTitleDirectoryBudgetAndSanitization(t *testing.T) {
 			t.Fatal(got)
 		}
 	}
-	if m.conv.Title != strings.Repeat("界", 40) {
+	if m.session.Title != strings.Repeat("界", 40) {
 		t.Fatal("saved title was shortened")
 	}
 	m.running = false

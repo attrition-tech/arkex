@@ -34,26 +34,26 @@ type Connection struct {
 // unknown or nothing is connected. It lives on the agent's model so a
 // window learned mid-run is reflected everywhere.
 func (m *model) contextWindow() int {
-	if m.sess.Agent == nil {
+	if m.connection.Agent == nil {
 		return 0
 	}
-	return m.sess.Agent.ContextWindow()
+	return m.connection.Agent.ContextWindow()
 }
 
 // Options configures the TUI.
 type Options struct {
-	// Session may have a nil Agent: the TUI then opens on the Connections panel
+	// Connection may have a nil Agent: the TUI then opens on the Connections panel
 	// so the user can connect something.
-	Session Connection
-	Cwd     string
-	Version string
+	Connection Connection
+	Cwd        string
+	Version    string
 	// Workspace is the canonical tool root. Cwd retains the launch path for
 	// existing session/history keys. Empty uses Cwd for embedded callers.
 	Workspace string
 	// Connect builds a fresh agent for a model selector. Used by /model and
 	// the Connections panel.
 	Connect func(ctx context.Context, selector string) (Connection, error)
-	// Prepare binds conversation-owned resources before any model request.
+	// Prepare binds session-owned resources before any model request.
 	Prepare func(*agent.Agent, string) error
 	// ConfigPath is the file the Connections panel edits (the global config).
 	ConfigPath string
@@ -235,7 +235,7 @@ type model struct {
 	width  int
 	height int
 
-	sess           Connection
+	connection     Connection
 	startupCmd     tea.Cmd
 	connectionGen  int
 	baseSystem     string
@@ -283,7 +283,7 @@ type model struct {
 	mouse          bool                // report mouse events (wheel, clicks)
 	spans          []span              // block line ranges from the last renderBlocks
 	lineBuf        []string            // transcript lines, reused between refreshes
-	conv           *session.Session    // current conversation on disk; nil until the first turn
+	session        *session.Session    // active session; nil until the first prompt
 	persistence    *contextPersistence // owned by the current run's worker
 	inboxSaving    bool
 	inboxReplaying bool
@@ -338,7 +338,7 @@ func newModel(o Options) *model {
 		stickBottom: true,
 		mouse:       o.UI.MouseOn(),
 	}
-	m.setSession(o.Session)
+	m.setConnection(o.Connection)
 	t, knownTheme := themeByName(o.UI.Theme)
 	if !knownTheme {
 		t = themes[0]
@@ -361,11 +361,11 @@ func newModel(o Options) *model {
 	return m
 }
 
-// setSession swaps the active agent and remembers its base system prompt.
-func (m *model) setSession(c Connection) {
-	m.sess = c
+// setConnection swaps the active agent and remembers its base system prompt.
+func (m *model) setConnection(c Connection) {
+	m.connection = c
 	if c.Agent == nil {
-		m.sess.Name = "no model"
+		m.connection.Name = "no model"
 		m.baseSystem = ""
 		return
 	}
@@ -495,7 +495,7 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 	case inboxDoneMsg:
 		return m, m.inboxDone(msg)
 	case inputDeliveredMsg:
-		if msg.owner == m.conv {
+		if msg.owner == m.session {
 			var files []string
 			for _, part := range msg.input.Message.Content {
 				if file, ok := fantasy.AsMessagePart[fantasy.FilePart](part); ok {
@@ -602,13 +602,13 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 		} else if msg.err != nil && !errors.Is(msg.err, context.Canceled) {
 			m.appendSystem("error: " + msg.err.Error())
 			if agent.IsContextOverflow(msg.err) {
-				m.appendSystem("the conversation still does not fit the model's context window — /compact summarises it again, /new starts over")
+				m.appendSystem("the session history still does not fit the model's context window — /compact summarises it again, /new starts a fresh session")
 			}
 		} else if errors.Is(msg.err, context.Canceled) {
 			m.appendSystem("cancelled")
 		}
-		if msg.err != nil && m.conv != nil {
-			m.conv.QueuePaused = true
+		if msg.err != nil && m.session != nil {
+			m.session.QueuePaused = true
 		}
 		m.status = ""
 		m.refresh()
@@ -851,7 +851,7 @@ func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.running {
 			return m, m.enqueueDraft(true)
 		}
-		if m.sess.Agent == nil && (!strings.HasPrefix(text, "!") || len(text) <= 1) {
+		if m.connection.Agent == nil && (!strings.HasPrefix(text, "!") || len(text) <= 1) {
 			// Connecting must not consume the draft or its attachments.
 			m.openModels(m.o.StartupNote)
 			return m, nil
@@ -887,8 +887,8 @@ func (m *model) handleKey(k tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+l":
 		m.replaceTranscript(nil)
 		note := "screen cleared"
-		if m.conv != nil {
-			note += " · the conversation continues (/new starts over)"
+		if m.session != nil {
+			note += " · the session continues (/new starts a fresh session)"
 		}
 		m.appendSystem(note)
 		m.refresh()
@@ -930,9 +930,9 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 	switch fields[0] {
 	case "/quit", "/exit", "/q":
 		return m, m.confirmQuit()
-	case "/clear", "/new":
+	case "/new", "/clear":
 		if m.running {
-			m.appendSystem("cannot clear while working; press esc twice to cancel first")
+			m.appendSystem("cannot start a new session while working; press esc twice to cancel first")
 		} else {
 			return m, m.newSession()
 		}
@@ -951,13 +951,13 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		m.refresh()
 		return m, cmd
 	case "/rename":
-		if m.conv == nil {
+		if m.session == nil {
 			return m, m.sessionError(errors.New("no saved session to rename"))
 		}
 		if len(fields) < 2 {
-			return m, m.editSessionTitle(m.conv.ID, m.conv.Title)
+			return m, m.editSessionTitle(m.session.ID, m.session.Title)
 		}
-		return m, m.renameSession(m.conv.ID, strings.TrimSpace(strings.TrimPrefix(text, "/rename")))
+		return m, m.renameSession(m.session.ID, strings.TrimSpace(strings.TrimPrefix(text, "/rename")))
 	case "/compact":
 		return m, m.compact()
 	case "/stats":
@@ -1028,24 +1028,24 @@ func (m *model) submit(text string, files []fantasy.FilePart) tea.Cmd {
 }
 
 func (m *model) submitAt(text string, files []fantasy.FilePart, sentAt time.Time) tea.Cmd {
-	if m.sess.Agent == nil {
+	if m.connection.Agent == nil {
 		m.appendSystem("no model connected — /models to add one")
 		m.refresh()
 		return nil
 	}
-	if m.conv == nil {
-		m.conv = session.New(m.o.Cwd)
+	if m.session == nil {
+		m.session = session.New(m.o.Cwd)
 	}
 	send := expandMentions(m.o.Cwd, text) + m.takeShellNotes()
 	if send == "" {
 		send = "(see the attached image)"
 	}
 	msg := fantasy.NewUserMessage(send, files...)
-	if m.conv.Title == "" {
-		m.conv.Title = session.TitleFor([]fantasy.Message{msg})
+	if m.session.Title == "" {
+		m.session.Title = session.TitleFor([]fantasy.Message{msg})
 	}
 	b := userBlock(text, attachmentNames(files))
-	b.prompt = m.conv.Checkpoint(m.sess.Agent.Messages(), text, msg, m.sess.Name)
+	b.prompt = m.session.Checkpoint(m.connection.Agent.Messages(), text, msg, m.connection.Name)
 	m.blocks = append(m.blocks, b)
 	return m.startRunAt(sentAt, func(ctx context.Context, ag *agent.Agent, emit func(agent.Event)) error {
 		return ag.RunMessage(ctx, msg, emit)
@@ -1062,7 +1062,7 @@ func userBlock(text string, images []string) *block {
 
 // continueRun resumes a paused run.
 func (m *model) continueRun() tea.Cmd {
-	if m.sess.Agent == nil || !m.paused {
+	if m.connection.Agent == nil || !m.paused {
 		return nil
 	}
 	m.paused = false
@@ -1073,22 +1073,22 @@ func (m *model) continueRun() tea.Cmd {
 }
 
 func (m *model) prepareAgent() error {
-	if m.conv == nil {
-		m.conv = session.New(m.o.Cwd)
+	if m.session == nil {
+		m.session = session.New(m.o.Cwd)
 	}
-	ag := m.sess.Agent
+	ag := m.connection.Agent
 	ag.System = m.baseSystem
-	m.conv.Model = m.sess.Name
-	m.conv.UsageIn, m.conv.UsageOut = m.usageIn, m.usageOut
+	m.session.Model = m.connection.Name
+	m.session.UsageIn, m.session.UsageOut = m.usageIn, m.usageOut
 	if ag.Model != nil {
 		level := ag.Model.Ref.Thinking
-		m.conv.Effort = &level
+		m.session.Effort = &level
 	}
-	m.persistence = &contextPersistence{owner: m.conv, state: *m.conv, send: m.send}
+	m.persistence = &contextPersistence{owner: m.session, state: *m.session, send: m.send}
 	ag.StoreContext = m.persistence.store
-	ag.Tools.BindHistory(m.conv.HistoryReader())
+	ag.Tools.BindHistory(m.session.HistoryReader())
 	if m.o.Prepare != nil {
-		return m.o.Prepare(ag, m.conv.ID)
+		return m.o.Prepare(ag, m.session.ID)
 	}
 	return nil
 }
@@ -1129,7 +1129,7 @@ func (m *model) startRunAt(sentAt time.Time, fn func(context.Context, *agent.Age
 	if send == nil {
 		send = func(tea.Msg) {} // no program (tests): events are dropped
 	}
-	ag := m.sess.Agent
+	ag := m.connection.Agent
 	persistence := m.persistence
 	persistence.run, persistence.steerOpen = true, true
 	gen := m.runGen
@@ -1302,7 +1302,7 @@ func (m *model) tool(id string) *block {
 }
 
 // renderWelcome refreshes workspace info and the cached recent-session list.
-// Greeting selection belongs to newModel/newConv, not redraws or theme changes.
+// Greeting selection belongs to newModel/resetSession, not redraws or theme changes.
 func (m *model) renderWelcome() {
 	m.historyCache.turn = nil
 	m.start.recent, _ = session.List(m.o.Cwd)
@@ -1916,7 +1916,7 @@ func (m *model) inputView() string {
 
 // windowTitle is independent of terminal width: tabs have their own layout.
 func (m *model) windowTitle() string {
-	name := strings.Join(strings.Fields(sanitize.Terminal(m.convTitle())), " ")
+	name := strings.Join(strings.Fields(sanitize.Terminal(m.sessionTitle())), " ")
 	if name == "" {
 		name = "New session"
 	}

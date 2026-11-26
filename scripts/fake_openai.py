@@ -106,7 +106,7 @@ class Handler(BaseHTTPRequestHandler):
         compacted = any("summary of the conversation so far" in str(m.get("content", "")).lower() for m in msgs)
         summarizing = any("Write an updated hand-off summary" in str(m.get("content", ""))
                           for m in msgs if m.get("role") == "system")
-        title_request = any("Name this conversation for a session list." in str(m.get("content", ""))
+        title_request = any("Name this session for the session list." in str(m.get("content", ""))
                             for m in msgs if m.get("role") == "system")
         delay = 0.02
 

@@ -37,7 +37,7 @@ func TestWelcomeContentAndStableGreeting(t *testing.T) {
 	m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
 	m.setTheme("light")
 	t.Cleanup(func() { applyTheme(themes[0]) })
-	m.setSession(Connection{Agent: &agent.Agent{}, Name: "other/current-model"})
+	m.setConnection(Connection{Agent: &agent.Agent{}, Name: "other/current-model"})
 	if got := ansi.Strip(m.View().Content); !strings.Contains(got, "other/current-model ▾") {
 		t.Fatalf("selector must use current connection, not startup options: %s", got)
 	}
@@ -75,7 +75,7 @@ func TestWelcomeRecentWorkspaceSessionsAndResume(t *testing.T) {
 	save(t.TempDir(), "Other workspace", "", now)
 	for _, method := range []string{"keyboard", "mouse"} {
 		t.Run(method, func(t *testing.T) {
-			m := newModel(Options{Cwd: cwd, Session: Connection{Agent: &agent.Agent{}, Name: "local/test"}})
+			m := newModel(Options{Cwd: cwd, Connection: Connection{Agent: &agent.Agent{}, Name: "local/test"}})
 			m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
 			text := ansi.Strip(m.View().Content)
 			if len(m.start.recent) != 5 {
@@ -106,7 +106,7 @@ func TestWelcomeRecentWorkspaceSessionsAndResume(t *testing.T) {
 				}
 				click(m, g.x+4, g.recent+1)
 			}
-			if m.conv == nil || m.conv.ID != sessions[1].ID || m.onWelcome() {
+			if m.session == nil || m.session.ID != sessions[1].ID || m.onWelcome() {
 				t.Fatal("did not resume the selected session")
 			}
 			frameLines(t, m, "resumed chat")
@@ -125,7 +125,7 @@ func TestWelcomeDraftConnectAndSubmit(t *testing.T) {
 	m.layout()
 	greeting := m.start.greeting
 	typeKeys(m, "enter")
-	if m.panel == nil || m.input.Value() != "Keep this draft" || len(m.attachments) != 1 || m.conv != nil {
+	if m.panel == nil || m.input.Value() != "Keep this draft" || len(m.attachments) != 1 || m.session != nil {
 		t.Fatal("sending without a model must open Connections without consuming the draft")
 	}
 	m.closeModels()
@@ -140,7 +140,7 @@ func TestWelcomeDraftConnectAndSubmit(t *testing.T) {
 		t.Fatal("mouse Connect a model did not open Connections")
 	}
 	m.closeModels()
-	m.setSession(Connection{Agent: &agent.Agent{}, Name: "local/current"})
+	m.setConnection(Connection{Agent: &agent.Agent{}, Name: "local/current"})
 	typeKeys(m, "tab", "enter")
 	if m.pal == nil || m.pal.level().title != "Switch model" {
 		t.Fatal("connected selector did not open model picker")
@@ -151,7 +151,7 @@ func TestWelcomeDraftConnectAndSubmit(t *testing.T) {
 	}
 	// Exercise the actual Enter path, but don't execute the returned network command.
 	typeKeys(m, "enter")
-	if m.onWelcome() || !m.running || m.conv == nil || m.input.Value() != "" || len(m.attachments) != 0 {
+	if m.onWelcome() || !m.running || m.session == nil || m.input.Value() != "" || len(m.attachments) != 0 {
 		t.Fatal("first send did not enter chat")
 	}
 	b := m.blocks[len(m.blocks)-1]

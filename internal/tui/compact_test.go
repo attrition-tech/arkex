@@ -44,7 +44,7 @@ func (f *fakeLM) handler(w http.ResponseWriter, r *http.Request) {
 	if messages, ok := req["messages"].([]any); ok && len(messages) != 0 {
 		first, _ := messages[0].(map[string]any)
 		text, _ := first["content"].(string)
-		titleRequest = first["role"] == "system" && strings.HasPrefix(text, "Name this conversation for a session list.")
+		titleRequest = first["role"] == "system" && strings.HasPrefix(text, "Name this session for the session list.")
 	}
 	f.mu.Lock()
 	var resp string
@@ -152,7 +152,7 @@ func fakeAgentModel(t *testing.T, lm *fakeLM, contextWindow int) *harness {
 	m.o.Connect = nil
 	m.send = h.enqueue
 	ag := &agent.Agent{Model: lmodel, Tools: tools.Default(m.o.Cwd), Policy: agent.AllowAll{}, System: "test"}
-	m.setSession(Connection{Agent: ag, Name: "fake/m"})
+	m.setConnection(Connection{Agent: ag, Name: "fake/m"})
 	return h
 }
 
@@ -205,15 +205,15 @@ func TestCompactionBoundarySavesCurrentReasoningSetting(t *testing.T) {
 		t.Fatal(err)
 	}
 	old := "high"
-	m.conv.Effort = &old
-	m.sess.Agent.Model.Ref.Thinking = "low"
+	m.session.Effort = &old
+	m.connection.Agent.Model.Ref.Thinking = "low"
 	if err := m.prepareAgent(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := m.sess.Agent.StoreContext(t.Context(), []fantasy.Message{fantasy.NewUserMessage("work")}); err != nil {
+	if _, err := m.connection.Agent.StoreContext(t.Context(), []fantasy.Message{fantasy.NewUserMessage("work")}); err != nil {
 		t.Fatal(err)
 	}
-	saved, err := session.Load(m.o.Cwd, m.conv.ID)
+	saved, err := session.Load(m.o.Cwd, m.session.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,8 +233,8 @@ func TestAutoCompactBeforePromptWhenContextIsNearlyFull(t *testing.T) {
 	m.setInput("hi")
 	_, cmd := m.Update(key("enter"))
 	m.drive(cmd)
-	if m.lastInput != 8500 || m.sess.Agent.LastInput() != 8500 {
-		t.Fatalf("lastInput=%d agent=%d", m.lastInput, m.sess.Agent.LastInput())
+	if m.lastInput != 8500 || m.connection.Agent.LastInput() != 8500 {
+		t.Fatalf("lastInput=%d agent=%d", m.lastInput, m.connection.Agent.LastInput())
 	}
 	m.command("/stats")
 	if f := ansi.Strip(m.View().Content); !strings.Contains(f, "85%") {
@@ -274,7 +274,7 @@ func TestAutoCompactBeforePromptWhenContextIsNearlyFull(t *testing.T) {
 		t.Fatalf("lastInput after the new turn = %d", m.lastInput)
 	}
 	// The saved session holds the compacted conversation.
-	if got := len(m.sess.Agent.Messages()); got != 4 {
+	if got := len(m.connection.Agent.Messages()); got != 4 {
 		t.Fatalf("agent messages = %d", got)
 	}
 }
@@ -299,14 +299,14 @@ func TestGatewayUsageSurvivesStatsAndCompacts(t *testing.T) {
 			m.setInput("hi")
 			_, cmd := m.Update(key("enter"))
 			m.drive(cmd)
-			if m.lastInput != int64(tc.tokens) || m.sess.Agent.LastInput() != int64(tc.tokens) {
-				t.Fatalf("context UI=%d agent=%d want=%d", m.lastInput, m.sess.Agent.LastInput(), tc.tokens)
+			if m.lastInput != int64(tc.tokens) || m.connection.Agent.LastInput() != int64(tc.tokens) {
+				t.Fatalf("context UI=%d agent=%d want=%d", m.lastInput, m.connection.Agent.LastInput(), tc.tokens)
 			}
 			if tc.cached && m.usageIn != 50 {
 				t.Fatalf("uncached billing changed: %d", m.usageIn)
 			}
 			m.command("/stats")
-			if tc.window == 0 && (!strings.Contains(ansi.Strip(m.View().Content), "Limit assumed") || m.sess.Agent.Model.Ref.Model.ContextWindow != 0) {
+			if tc.window == 0 && (!strings.Contains(ansi.Strip(m.View().Content), "Limit assumed") || m.connection.Agent.Model.Ref.Model.ContextWindow != 0) {
 				t.Fatal("fallback must be labelled and not persisted as confirmed")
 			}
 			m.setInput("continue")
@@ -344,11 +344,11 @@ func TestContextStoreCancellationAcknowledgesCommittedState(t *testing.T) {
 		t.Run(fmt.Sprint(committed), func(t *testing.T) {
 			t.Setenv("ARKEX_HOME", t.TempDir())
 			m, _ := testModel(t)
-			m.conv = session.New(t.TempDir())
+			m.session = session.New(t.TempDir())
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			var pending contextSavedMsg
-			persistence := &contextPersistence{owner: m.conv, state: *m.conv, send: func(msg tea.Msg) {
+			persistence := &contextPersistence{owner: m.session, state: *m.session, send: func(msg tea.Msg) {
 				pending = msg.(contextSavedMsg)
 				cancel()
 			}}
@@ -360,18 +360,18 @@ func TestContextStoreCancellationAcknowledgesCommittedState(t *testing.T) {
 				if err != nil || path == "" {
 					t.Fatal("lost durable acknowledgement", err)
 				}
-				if len(m.conv.Messages) != 0 {
+				if len(m.session.Messages) != 0 {
 					t.Fatal("worker mutated UI-owned state")
 				}
 				m.contextSaved(pending) // cancellation cannot hide a committed save
-				if len(m.conv.Messages) != 1 {
+				if len(m.session.Messages) != 1 {
 					t.Fatal("UI did not adopt committed state")
 				}
 			} else {
 				if !errors.Is(err, context.Canceled) {
 					t.Fatal(err)
 				}
-				if len(m.conv.Messages) != 0 {
+				if len(m.session.Messages) != 0 {
 					t.Fatal("late event committed canceled context")
 				}
 			}
@@ -382,7 +382,7 @@ func TestContextStoreCancellationAcknowledgesCommittedState(t *testing.T) {
 func TestCompactionReasoningSettingsDoNotChangeNormalRequests(t *testing.T) {
 	lm := &fakeLM{script: []string{streamText("before", 50), streamText("summary", 100), streamText("after", 60)}}
 	m := fakeAgentModel(t, lm, 32768)
-	ag := m.sess.Agent
+	ag := m.connection.Agent
 	ag.Model.Ref.Conn.Compat.Thinking = config.ThinkingDeepSeek
 	if err := ag.Model.SetThinking("on"); err != nil {
 		t.Fatal(err)

@@ -91,15 +91,15 @@ func (p *contextPersistence) finish(ctx context.Context, messages []fantasy.Mess
 }
 
 func (m *model) contextSaved(msg contextSavedMsg) {
-	if m.conv == msg.owner {
+	if m.session == msg.owner {
 		if msg.err != nil {
 			m.appendSystem("could not save the session: " + msg.err.Error())
 			m.refresh()
 		} else {
-			changed := !slices.EqualFunc(m.conv.Pending, msg.saved.Pending, func(a, b session.PendingInput) bool {
+			changed := !slices.EqualFunc(m.session.Pending, msg.saved.Pending, func(a, b session.PendingInput) bool {
 				return a.ID == b.ID && a.Steer == b.Steer
 			})
-			*m.conv = msg.saved
+			*m.session = msg.saved
 			if changed {
 				m.refreshPendingPalette()
 			}
@@ -114,14 +114,14 @@ func (m *model) contextSaved(msg contextSavedMsg) {
 // agent.Compacted events and are handled in applyEvent.
 func (m *model) compact() tea.Cmd {
 	switch {
-	case m.sess.Agent == nil:
+	case m.connection.Agent == nil:
 		m.appendSystem("no model connected — /models to add one")
 	case m.running:
 		m.appendSystem("still working; wait or press esc twice to cancel before /compact")
-	case len(m.sess.Agent.Messages()) == 0:
+	case len(m.connection.Agent.Messages()) == 0:
 		m.appendSystem("nothing to compact yet")
 	}
-	if m.sess.Agent == nil || m.running || len(m.sess.Agent.Messages()) == 0 {
+	if m.connection.Agent == nil || m.running || len(m.connection.Agent.Messages()) == 0 {
 		m.refresh()
 		return nil
 	}
@@ -146,7 +146,7 @@ func (m *model) compact() tea.Cmd {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancel = cancel
-	ag := m.sess.Agent
+	ag := m.connection.Agent
 	send := m.send
 	persistence := m.persistence
 	done := make(chan struct{})
@@ -177,8 +177,8 @@ func (m *model) compactDone(msg compactDoneMsg) tea.Cmd {
 	}
 	m.finishPendingTitle()
 	m.refresh()
-	if m.conv != nil && (msg.err != nil || m.runStopped) {
-		m.conv.QueuePaused = true
+	if m.session != nil && (msg.err != nil || m.runStopped) {
+		m.session.QueuePaused = true
 	}
 	return tea.Batch(m.finishPromptAction(), m.startQueued(false))
 }
@@ -188,7 +188,7 @@ func (m *model) compactDone(msg compactDoneMsg) tea.Cmd {
 // gauge and pre-emptive compaction work from the next start too.
 func (m *model) learnedContextWindow(tokens int) {
 	note := fmt.Sprintf("learned this model's context window: %d tokens", tokens)
-	ag := m.sess.Agent
+	ag := m.connection.Agent
 	if m.o.ConfigPath != "" && ag != nil && ag.Model != nil {
 		ref := ag.Model.Ref
 		if err := config.SetContextWindow(m.o.ConfigPath, ref.ConnID, ref.Model.ID, tokens); err != nil {

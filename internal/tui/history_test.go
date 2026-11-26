@@ -84,7 +84,7 @@ func TestHistoryCap(t *testing.T) {
 func TestUpDownRecallPrompts(t *testing.T) {
 	t.Setenv("ARKEX_HOME", t.TempDir())
 	m, _ := testModel(t)
-	m.setSession(Connection{Agent: &agent.Agent{}, Name: "fake/model"})
+	m.setConnection(Connection{Agent: &agent.Agent{}, Name: "fake/model"})
 	m.hist.add("older prompt")
 	m.hist.add("/help")
 	typeKeys(m, "n", "e", "w")
@@ -128,7 +128,7 @@ func TestUpInsideMultilineMovesCursor(t *testing.T) {
 func TestBangRunsShellAndAttachesOutput(t *testing.T) {
 	t.Setenv("ARKEX_HOME", t.TempDir())
 	m, _ := testModel(t)
-	m.setSession(Connection{Agent: &agent.Agent{}, Name: "local/a"})
+	m.setConnection(Connection{Agent: &agent.Agent{}, Name: "local/a"})
 	typeKeys(m, "!", "e", "c", "h", "o", " ", "h", "i")
 	_, cmd := m.handleKey(key("enter"))
 	if cmd == nil {
@@ -202,21 +202,21 @@ func TestBangUsesPinnedWorkspaceNotSessionAlias(t *testing.T) {
 	}
 }
 
-func TestCtrlLClearsScreenNotConversation(t *testing.T) {
+func TestCtrlLClearsScreenNotSession(t *testing.T) {
 	t.Setenv("ARKEX_HOME", t.TempDir())
 	m, _ := testModel(t)
 	m.o.Connect = nil
-	m.setSession(Connection{Agent: &agent.Agent{}, Name: "local/a"})
+	m.setConnection(Connection{Agent: &agent.Agent{}, Name: "local/a"})
 	m.submit("hello", nil)
-	m.sess.Agent.SetMessages(sampleMessages())
+	m.connection.Agent.SetMessages(sampleMessages())
 	m.Update(runDoneMsg{})
-	id := m.conv.ID
+	id := m.session.ID
 	m.handleKey(key("ctrl+l"))
-	if len(m.blocks) != 1 || !strings.Contains(m.blocks[0].text.String(), "conversation continues") {
+	if len(m.blocks) != 1 || !strings.Contains(m.blocks[0].text.String(), "session continues") {
 		t.Fatalf("blocks = %d", len(m.blocks))
 	}
-	if m.conv == nil || m.conv.ID != id || len(m.sess.Agent.Messages()) != 4 {
-		t.Fatal("ctrl+l must keep the conversation")
+	if m.session == nil || m.session.ID != id || len(m.connection.Agent.Messages()) != 4 {
+		t.Fatal("ctrl+l must keep the session")
 	}
 	// /new after ctrl+l brings the banner back.
 	m.command("/new")

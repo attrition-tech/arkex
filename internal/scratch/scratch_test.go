@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestConversationOwnershipAndCleanup(t *testing.T) {
+func TestSessionOwnershipAndCleanup(t *testing.T) {
 	var s, other Store
 	t.Cleanup(func() { _ = s.Close(); _ = other.Close() })
 	a, err := s.Dir("../../untrusted-id")
@@ -19,7 +19,7 @@ func TestConversationOwnershipAndCleanup(t *testing.T) {
 	}
 	again, err := s.Dir("../../untrusted-id")
 	if err != nil || again != a || a == b || filepath.Dir(a) != s.root {
-		t.Fatal("incorrect conversation ownership")
+		t.Fatal("incorrect session ownership")
 	}
 	outside, err := other.Dir("second")
 	if err != nil {
@@ -39,7 +39,7 @@ func TestConversationOwnershipAndCleanup(t *testing.T) {
 		t.Fatal("scratch not removed")
 	}
 	if data, err := os.ReadFile(file); err != nil || string(data) != "keep" {
-		t.Fatal("cleanup touched another run")
+		t.Fatal("cleanup touched another process's scratch")
 	}
 	fresh, err := s.Dir("../../untrusted-id")
 	if err != nil || fresh == a {

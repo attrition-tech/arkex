@@ -67,9 +67,9 @@ func TestStatsHoverDelayAndDismissal(t *testing.T) {
 func TestStatsKeyboardUsageAndPriority(t *testing.T) {
 	m := footerModel(t)
 	m.mouse = false
-	m.conv = session.New(m.o.Cwd)
-	m.conv.Title = "Named in terminal"
-	m.conv.TitleUsageIn, m.conv.TitleUsageOut = 11, 3
+	m.session = session.New(m.o.Cwd)
+	m.session.Title = "Named in terminal"
+	m.session.TitleUsageIn, m.session.TitleUsageOut = 11, 3
 	typeKeys(m, "/", "s", "t", "a", "t", "s", "enter")
 	plain := strings.Join(strings.Fields(ansi.Strip(m.View().Content)), " ")
 	for _, want := range []string{"Session stats", "local/deepseek-v4-flash", "450 / 1000 · 45%", "Session input ↑ 53", "Session output ↓ 10", "First answer —"} {

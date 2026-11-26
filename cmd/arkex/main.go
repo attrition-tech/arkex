@@ -216,15 +216,15 @@ func runRoot(ctx context.Context, f rootFlags, args []string) error {
 		}
 	}
 	if promptText != "" {
-		var conv *session.Session
+		var saved *session.Session
 		selector := f.model
 		if f.resume != "" {
-			conv, err = loadSession(cwd, f.resume)
+			saved, err = loadSession(cwd, f.resume)
 			if err != nil {
 				return err
 			}
 			if selector == "" {
-				selector = conv.Model
+				selector = saved.Model
 				if selector == "" {
 					return errors.New("session has no saved model; select one with --model")
 				}
@@ -237,58 +237,58 @@ func runRoot(ctx context.Context, f rootFlags, args []string) error {
 			}
 			return err
 		}
-		// --continue/--resume in print mode: load the saved conversation,
+		// --continue/--resume in print mode: load the saved session,
 		// answer, and save it back. Plain one-shot runs are not persisted.
-		if conv != nil {
-			ag.SetMessages(conv.Messages)
-			previousModel := conv.Model
-			if conv.Effort != nil && *conv.Effort != "" {
-				previousModel = strings.TrimSuffix(previousModel, ":"+*conv.Effort)
+		if saved != nil {
+			ag.SetMessages(saved.Messages)
+			previousModel := saved.Model
+			if saved.Effort != nil && *saved.Effort != "" {
+				previousModel = strings.TrimSuffix(previousModel, ":"+*saved.Effort)
 			}
 			if previousModel == ref.String() {
-				ag.RestoreLastInput(conv.LastInput)
+				ag.RestoreLastInput(saved.LastInput)
 			}
-			if conv.Effort != nil && previousModel == ref.String() && f.model == "" {
-				if err := ag.Model.SetThinking(*conv.Effort); err != nil {
+			if saved.Effort != nil && previousModel == ref.String() && f.model == "" {
+				if err := ag.Model.SetThinking(*saved.Effort); err != nil {
 					return fmt.Errorf("restoring reasoning setting: %w", err)
 				}
 				ref = ag.Model.Ref
 			}
 		}
 		id := ""
-		if conv != nil {
-			id = conv.ID
+		if saved != nil {
+			id = saved.ID
 		}
 		if err := prepare(ag, id); err != nil {
 			return err
 		}
-		if conv != nil {
-			ag.Tools.BindHistory(conv.HistoryReader())
+		if saved != nil {
+			ag.Tools.BindHistory(saved.HistoryReader())
 		}
 		// One-shot runs create a recoverable session only if compaction needs
 		// to replace history. Resumed sessions use the same durable boundary.
 		ag.StoreContext = func(ctx context.Context, msgs []fantasy.Message) (string, error) {
-			if conv == nil {
-				conv = session.New(cwd)
-				ag.Tools.BindHistory(conv.HistoryReader())
+			if saved == nil {
+				saved = session.New(cwd)
+				ag.Tools.BindHistory(saved.HistoryReader())
 			}
-			conv.Model = displayName(ref)
+			saved.Model = displayName(ref)
 			level := ag.Model.Ref.Thinking
-			conv.Effort = &level
-			return conv.SaveContext(ctx, msgs)
+			saved.Effort = &level
+			return saved.SaveContext(ctx, msgs)
 		}
 		if f.json {
 			err = modes.JSON(ctx, ag, promptText, os.Stdout)
 		} else {
 			err = modes.Print(ctx, ag, promptText, os.Stdout, os.Stderr)
 		}
-		if conv != nil {
+		if saved != nil {
 			usage := ag.LastUsage()
-			conv.Update(ag.Messages(), session.Usage{Model: displayName(ref), Input: conv.UsageIn + usage.InputTokens, Output: conv.UsageOut + usage.OutputTokens})
-			conv.LastInput = ag.LastInput()
+			saved.Update(ag.Messages(), session.Usage{Model: displayName(ref), Input: saved.UsageIn + usage.InputTokens, Output: saved.UsageOut + usage.OutputTokens})
+			saved.LastInput = ag.LastInput()
 			level := ag.Model.Ref.Thinking
-			conv.Effort = &level
-			if serr := conv.Save(); serr != nil && err == nil {
+			saved.Effort = &level
+			if serr := saved.Save(); serr != nil && err == nil {
 				err = fmt.Errorf("saving session: %w", serr)
 			}
 		}
@@ -326,7 +326,7 @@ func runRoot(ctx context.Context, f rootFlags, args []string) error {
 		return err
 	}
 	if ag, ref, err := connect(ctx, f.model); err == nil {
-		opts.Session = tui.Connection{Agent: ag, Name: displayName(ref)}
+		opts.Connection = tui.Connection{Agent: ag, Name: displayName(ref)}
 	} else if f.model != "" {
 		return err // an explicit --model that does not work is a hard error
 	} else if !errors.Is(err, errNoConnections) {

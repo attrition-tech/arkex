@@ -428,9 +428,14 @@ persists in the host Homebrew prefix and trusts the manager and official package
 installation scripts. The tool verifies package-manager records; the model must
 then check executable availability and project compatibility inside the sandbox.
 
+A **session** is saved work and its message history. A **run** is one agent
+execution, ending when it finishes, stops, or pauses. A **message** is an
+individual prompt or reply.
+
 Use `/model` to switch models, `/resume` for saved sessions, `/new` for a fresh
-conversation, and `/help` for commands. Press Esc twice to stop a run or Ctrl+C
-twice to exit when idle. Model output is untrusted: review changes before shipping.
+session, and `/help` for commands. `/new` preserves the previous session;
+`/clear` remains an alias. Press Esc twice to stop a run or Ctrl+C twice to exit
+when idle. Model output is untrusted: review changes before shipping.
 
 New interactive sessions are named automatically after their first successful
 exchange. Arkex immediately shows a local title, then sends a bounded text excerpt
@@ -441,14 +446,14 @@ are preserved. Use `/rename` or **Generate title with AI** in `/sessions` to cha
 a title later; explicit AI regeneration still offers an editable preview.
 
 To edit a sent prompt, select it with Tab/Shift+Tab from an empty input and press
-Enter, or click the prompt. Edit and confirm to resend in a new conversation
+Enter, or click the prompt. Edit and confirm to resend in a new session
 branch; the original stays in `/resume`. Esc cancels editing. File changes are
 not undone. The command palette's **Edit sent prompt** also includes prompts
 saved before context compaction.
 
 Choose **Remove from here…** from a sent prompt's menu (or press Delete while
 it is selected) to create a branch without that prompt and everything after it.
-Confirmation is required; the original conversation and file changes remain.
+Confirmation is required; the original session and file changes remain.
 
 ### Context compaction
 

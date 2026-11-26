@@ -168,7 +168,7 @@ try:
                     wait(lambda s: "summary incomplete" in s, "truncated summary accepted")
                 elif mode == "refuses":
                     text = wait(lambda s: "summary exceeds the replacement budget" in s, "unbounded shortening")
-                    assert "the conversation still does not fit" not in text, "internal budget failure misclassified as provider overflow"
+                    assert "the session history still does not fit" not in text, "internal budget failure misclassified as provider overflow"
                 time.sleep(.3)
                 capture(mode + "-done")
                 saved = json.loads(session_path.read_text())

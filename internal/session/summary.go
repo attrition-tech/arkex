@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// Listings retain metadata and a count, not decoded conversations. Reuse a
+// Listings retain metadata and a count, not decoded message histories. Reuse a
 // scratch message so peak memory scales with the largest message, not history.
 // No new on-disk metadata or migration is needed for existing sessions.
 func readSummary(r io.Reader) (s Summary, state string, err error) {

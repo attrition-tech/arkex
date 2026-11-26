@@ -1,4 +1,4 @@
-// Package scratch owns disposable conversation directories for one Arkex run.
+// Package scratch owns disposable session directories for one Arkex process.
 package scratch
 
 import (
@@ -59,7 +59,7 @@ func unchangedDirectory(dir string) error {
 	return nil
 }
 
-// Close removes only this process's randomly created tree, not other runs.
+// Close removes only this process's randomly created tree, not other processes'.
 // Call only after tools have stopped. Crashes intentionally leave leftovers.
 func (s *Store) Close() error {
 	if s.root == "" {

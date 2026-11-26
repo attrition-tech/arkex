@@ -241,12 +241,12 @@ func TestSlashCommandsHelpNewAndCompact(t *testing.T) {
 
 	m.command("/help")
 	m.vp.ScrollUp(m.vp.YOffset())
-	if !strings.Contains(transcript(m), "/models") {
+	if !strings.Contains(transcript(m), "/new") || !strings.Contains(transcript(m), "fresh session") || !strings.Contains(transcript(m), "also /clear") {
 		t.Fatalf("help missing:\n%s", transcript(m))
 	}
 	m.command("/new")
 	if strings.Contains(transcript(m), "old question") || len(m.blocks) != 1 {
-		t.Fatalf("/new kept the conversation: %d blocks", len(m.blocks))
+		t.Fatalf("/new kept the old transcript: %d blocks", len(m.blocks))
 	}
 	m.command("/nope")
 	if !strings.Contains(transcript(m), "unknown command") {

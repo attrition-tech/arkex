@@ -20,9 +20,9 @@ type welcomeScreen struct {
 	hover    int
 }
 
-// The welcome screen is only an empty conversation, never a transcript page.
+// The welcome screen is only an empty session, never a transcript page.
 func (m *model) onWelcome() bool {
-	return m.conv == nil && !m.running && m.pending == nil && m.editingPrompt == nil &&
+	return m.session == nil && !m.running && m.pending == nil && m.editingPrompt == nil &&
 		len(m.blocks) == 1 && m.blocks[0] == m.welcome
 }
 
@@ -91,8 +91,8 @@ func welcomeText(s string) string {
 
 func (m *model) welcomeModelLabel() string {
 	label := "Connect a model"
-	if m.sess.Agent != nil {
-		label = welcomeText(m.sess.Name)
+	if m.connection.Agent != nil {
+		label = welcomeText(m.connection.Name)
 	}
 	return " " + ansi.Truncate(label, max(1, m.welcomeWidth()-4), "…") + " ▾ "
 }
@@ -185,7 +185,7 @@ func (m *model) activateWelcome(target int) tea.Cmd {
 	m.focusWelcome(0)
 	m.start.hover = 0
 	if target == 1 {
-		if m.sess.Agent == nil {
+		if m.connection.Agent == nil {
 			m.openModels(m.o.StartupNote)
 			return nil
 		}

@@ -28,10 +28,10 @@ func promptRemoveItems(m *model) []paletteItem {
 
 func promptItems(m *model, action func(*model, int) tea.Cmd) []paletteItem {
 	var items []paletteItem
-	if m.conv != nil {
-		for i := len(m.conv.Prompts); i > 0; i-- {
+	if m.session != nil {
+		for i := len(m.session.Prompts); i > 0; i-- {
 			index := i
-			label := strings.Join(strings.Fields(sanitize.Terminal(m.conv.Prompts[i-1].Text)), " ")
+			label := strings.Join(strings.Fields(sanitize.Terminal(m.session.Prompts[i-1].Text)), " ")
 			if label == "" {
 				label = "Image prompt"
 			}
@@ -46,7 +46,7 @@ func promptItems(m *model, action func(*model, int) tea.Cmd) []paletteItem {
 }
 
 func (m *model) requestPromptEdit(index int) tea.Cmd {
-	if m.conv == nil || index < 1 || index > len(m.conv.Prompts) {
+	if m.session == nil || index < 1 || index > len(m.session.Prompts) {
 		m.flash("No checkpoint is available for this prompt")
 		return nil
 	}
@@ -69,15 +69,15 @@ func (m *model) requestPromptEdit(index int) tea.Cmd {
 }
 
 func (m *model) beginPromptEdit(index int) tea.Cmd {
-	if m.running || m.conv == nil || index < 1 || index > len(m.conv.Prompts) {
+	if m.running || m.session == nil || index < 1 || index > len(m.session.Prompts) {
 		return nil
 	}
 	cmd := m.closePalette()
 	if m.editingPrompt != nil {
 		m.cancelPromptEdit()
 	}
-	p := m.conv.Prompts[index-1]
-	m.editingPrompt = &promptEdit{index: index, sessionID: m.conv.ID, draft: m.input.Value(),
+	p := m.session.Prompts[index-1]
+	m.editingPrompt = &promptEdit{index: index, sessionID: m.session.ID, draft: m.input.Value(),
 		attachments: append([]attachment(nil), m.attachments...)}
 	m.promptFocus, m.comp = nil, nil
 	m.attachments = nil
@@ -111,7 +111,7 @@ func (m *model) confirmPromptResend() tea.Cmd {
 
 func (m *model) resendPrompt() tea.Cmd {
 	e := m.editingPrompt
-	if m.running || e == nil || m.conv == nil || m.conv.ID != e.sessionID || m.sess.Agent == nil {
+	if m.running || e == nil || m.session == nil || m.session.ID != e.sessionID || m.connection.Agent == nil {
 		return m.closePalette()
 	}
 	next, err := m.forkPrompt(e.index)
@@ -125,40 +125,40 @@ func (m *model) resendPrompt() tea.Cmd {
 	m.input.Reset()
 	m.comp = nil
 	m.closePalette()
-	m.conv = next
-	m.sess.Agent.SetMessages(next.Messages)
-	m.sess.Agent.RestoreLastInput(0)
+	m.session = next
+	m.connection.Agent.SetMessages(next.Messages)
+	m.connection.Agent.RestoreLastInput(0)
 	m.usageIn, m.usageOut, m.lastInput = 0, 0, 0
 	m.replaceTranscript(append([]*block{m.welcome}, blocksFromMessages(next.Messages)...))
 	m.bindPromptCheckpoints()
 	m.resizeInput()
 	m.hist.add(text)
-	m.flash("New branch · original conversation kept in Sessions")
+	m.flash("New branch · original session kept in /resume")
 	return m.submit(text, files)
 }
 
 // forkPrompt requires an idle agent and saves the source before switching away.
 func (m *model) forkPrompt(index int) (*session.Session, error) {
-	next, err := m.conv.Fork(index)
+	next, err := m.session.Fork(index)
 	if err == nil {
 		// Never abandon the original branch if it could not be saved.
-		m.conv.Update(m.sess.Agent.Messages(), session.Usage{Model: m.sess.Name, Input: m.usageIn, Output: m.usageOut})
-		err = m.conv.Save()
+		m.session.Update(m.connection.Agent.Messages(), session.Usage{Model: m.connection.Name, Input: m.usageIn, Output: m.usageOut})
+		err = m.session.Save()
 	}
 	if err != nil {
 		return nil, err
 	}
-	if providerOf(next.Model) != providerOf(m.sess.Name) {
+	if providerOf(next.Model) != providerOf(m.connection.Name) {
 		next.Messages = stripReasoning(next.Messages)
 	}
 	return next, nil
 }
 
 func (m *model) confirmPromptRemove(index int) tea.Cmd {
-	if m.conv == nil || index < 1 || index > len(m.conv.Prompts) {
+	if m.session == nil || index < 1 || index > len(m.session.Prompts) {
 		return nil
 	}
-	id := m.conv.ID
+	id := m.session.ID
 	label := "Remove in a new branch"
 	if m.running {
 		label = "Stop; remove in new branch"
@@ -166,7 +166,7 @@ func (m *model) confirmPromptRemove(index int) tea.Cmd {
 	return m.openPaletteSub("Remove prompt and later?", []paletteItem{
 		{title: "Cancel", action: func(m *model) tea.Cmd { return m.closePalette() }},
 		{title: label, detail: "Original kept; files unchanged.", action: func(m *model) tea.Cmd {
-			if m.conv == nil || m.conv.ID != id {
+			if m.session == nil || m.session.ID != id {
 				return m.closePalette()
 			}
 			if m.running {
@@ -180,27 +180,27 @@ func (m *model) confirmPromptRemove(index int) tea.Cmd {
 }
 
 func (m *model) removePrompt(index int) tea.Cmd {
-	if m.running || m.conv == nil || m.sess.Agent == nil {
+	if m.running || m.session == nil || m.connection.Agent == nil {
 		return nil
 	}
 	next, err := m.forkPrompt(index)
 	if err != nil {
 		return m.sessionError(err)
 	}
-	next.Title = m.conv.Title + " (trimmed)"
-	next.Update(next.Messages, session.Usage{Model: m.sess.Name})
-	if m.sess.Agent.Model != nil {
-		level := m.sess.Agent.Model.Ref.Thinking
+	next.Title = m.session.Title + " (trimmed)"
+	next.Update(next.Messages, session.Usage{Model: m.connection.Name})
+	if m.connection.Agent.Model != nil {
+		level := m.connection.Agent.Model.Ref.Thinking
 		next.Effort = &level
 	}
 	if err := next.Save(); err != nil {
 		return m.sessionError(err)
 	}
 	cmd := m.closePalette()
-	m.loadConversation(next)
+	m.loadSession(next)
 	// Neither pending shell context nor a continuation belongs to this branch.
 	m.shellNotes = nil
-	m.flash("Removed from this branch · original kept in Sessions · files unchanged")
+	m.flash("Removed from this branch · original session kept in /resume · files unchanged")
 	return cmd
 }
 
@@ -219,17 +219,17 @@ func (m *model) finishPromptAction() tea.Cmd {
 // Match surviving user messages backwards. Repeated prompts remain distinct;
 // compacted prompts are still available through the palette checkpoint list.
 func (m *model) bindPromptCheckpoints() {
-	if m.conv == nil {
+	if m.session == nil {
 		return
 	}
-	i := len(m.conv.Prompts) - 1
+	i := len(m.session.Prompts) - 1
 	for b := len(m.blocks) - 1; b >= 0 && i >= 0; b-- {
 		if m.blocks[b].kind != blockUser {
 			continue
 		}
 		text := m.blocks[b].text.String()
 		for i >= 0 {
-			p := m.conv.Prompts[i]
+			p := m.session.Prompts[i]
 			i--
 			if text == p.Text || text == session.UserText(p.Prompt) {
 				m.blocks[b].prompt = i + 2

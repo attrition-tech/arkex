@@ -412,8 +412,8 @@ func TestInputViewCacheTracksEveryVisibleChange(t *testing.T) {
 
 func TestFooterCacheTracksEveryVisibleChange(t *testing.T) {
 	m, _ := testModel(t)
-	m.sess.Name = "local/model"
-	m.sess.Agent = &agent.Agent{Model: &provider.Model{}}
+	m.connection.Name = "local/model"
+	m.connection.Agent = &agent.Agent{Model: &provider.Model{}}
 	drop := func() { m.footerCache.view = "" }
 	render := m.footer
 
@@ -436,7 +436,7 @@ func TestFooterCacheTracksEveryVisibleChange(t *testing.T) {
 	v = checkCached(t, "running", v, render, drop)
 	m.startedAt = m.startedAt.Add(-time.Second)
 	m.usageIn, m.usageOut = 10, 20
-	m.sess.Agent.SetContextWindow(1000)
+	m.connection.Agent.SetContextWindow(1000)
 	m.lastInput = 250
 	if render() != v {
 		t.Fatal("hidden stats changed the footer")

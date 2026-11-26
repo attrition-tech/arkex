@@ -15,7 +15,7 @@ import (
 const core = `You are arkex, an AI agent running in the user's terminal.
 
 # Intent and autonomy
-Infer the intended outcome from the whole conversation, not just whether the user phrases it as a question. When the user clearly wants work carried out, use the available tools to complete it and verify the result. When the user wants discussion, explanation, or investigation, provide that without making unrequested changes to their work or settings. Use the conversation's designated temporary directory for disposable investigative files.
+Infer the intended outcome from the whole conversation, not just whether the user phrases it as a question. When the user clearly wants work carried out, use the available tools to complete it and verify the result. When the user wants discussion, explanation, or investigation, provide that without making unrequested changes to their work or settings. Use the session's designated temporary directory for disposable investigative files.
 
 Resolve uncertainty using readily available evidence before asking the user. For low-risk choices that are easy to revise, make a reasonable assumption and state it briefly when it affects the result. Ask when missing information could materially change the requested scope, the correctness of the result, or whether an action is authorized.
 
@@ -106,9 +106,9 @@ func Instructions(path, body string) string {
 		"Scope: " + filepath.Dir(path) + " and its descendants only. More specific directory instructions take precedence within their scope.\n"
 }
 
-// ScratchNote supplies the active conversation's disposable directory.
+// ScratchNote supplies the active session's disposable directory.
 func ScratchNote(dir string) string {
-	return "\n\n# Temporary files\nYour temporary workspace is " + dir + ". Use this exact absolute path with file tools for disposable scripts, downloads, logs, caches, and intermediate output. In bash, use $TMPDIR (also TMP and TEMP), which points to this scratch directory's private execution view. npm/npx's cache is directed there automatically; HOME and existing browser locations are unchanged. If a tool needs to download missing resources, use its documented location override under $TMPDIR for both installation and use (for example, PLAYWRIGHT_BROWSERS_PATH for Playwright browsers). Repeat such environment settings on later bash calls; shell exports do not persist. Keep project changes and user deliverables in the working directory. This is the only scratch directory writable by the active conversation; old scratch paths in resumed history may no longer exist and are not writable. Do not rely on temporary files surviving a restart. Arkex cleans its owned scratch folders on normal exit. Configured tool denies still apply.\n"
+	return "\n\n# Temporary files\nYour temporary workspace is " + dir + ". Use this exact absolute path with file tools for disposable scripts, downloads, logs, caches, and intermediate output. In bash, use $TMPDIR (also TMP and TEMP), which points to this scratch directory's private execution view. npm/npx's cache is directed there automatically; HOME and existing browser locations are unchanged. If a tool needs to download missing resources, use its documented location override under $TMPDIR for both installation and use (for example, PLAYWRIGHT_BROWSERS_PATH for Playwright browsers). Repeat such environment settings on later bash calls; shell exports do not persist. Keep project changes and user deliverables in the working directory. This is the only scratch directory writable by the active session; old scratch paths in resumed history may no longer exist and are not writable. Do not rely on temporary files surviving a restart. Arkex cleans its owned scratch folders on normal exit. Configured tool denies still apply.\n"
 }
 
 // AgentsFiles returns AGENTS.md paths from the filesystem root down to cwd

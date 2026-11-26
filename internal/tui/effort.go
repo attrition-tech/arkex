@@ -12,10 +12,10 @@ import (
 )
 
 func (m *model) effortLabel() string {
-	if m.sess.Agent == nil || m.sess.Agent.Model == nil {
+	if m.connection.Agent == nil || m.connection.Agent.Model == nil {
 		return ""
 	}
-	level := m.sess.Agent.Model.Ref.Thinking
+	level := m.connection.Agent.Model.Ref.Thinking
 	if level == "" {
 		return "Default"
 	}
@@ -23,10 +23,10 @@ func (m *model) effortLabel() string {
 }
 
 func effortItems(m *model) []paletteItem {
-	if m.sess.Agent == nil || m.sess.Agent.Model == nil {
+	if m.connection.Agent == nil || m.connection.Agent.Model == nil {
 		return []paletteItem{{title: "Connect a model first", cmd: "/connections"}}
 	}
-	ref := m.sess.Agent.Model.Ref
+	ref := m.connection.Agent.Model.Ref
 	levels, def, source := provider.ReasoningControls(ref)
 	detail := source
 	if def != "" {
@@ -57,20 +57,20 @@ func effortItems(m *model) []paletteItem {
 func (m *model) setEffort(level string) {
 	if m.running {
 		m.appendSystem("cannot change reasoning while working; stop the run first")
-	} else if m.sess.Agent == nil || m.sess.Agent.Model == nil {
+	} else if m.connection.Agent == nil || m.connection.Agent.Model == nil {
 		m.appendSystem("connect a model first with /connections")
 	} else {
 		if level == "default" {
 			level = ""
 		}
-		if err := m.sess.Agent.Model.SetThinking(level); err != nil {
+		if err := m.connection.Agent.Model.SetThinking(level); err != nil {
 			m.appendSystem(err.Error())
 		} else {
-			m.sess.Name = m.sess.Agent.Model.Ref.String()
+			m.connection.Name = m.connection.Agent.Model.Ref.String()
 			if level != "" {
-				m.sess.Name += ":" + level
+				m.connection.Name += ":" + level
 			}
-			m.saveConv()
+			m.saveSession()
 			m.flash("reasoning: " + m.effortLabel() + " · applies to the next request")
 		}
 	}
@@ -78,12 +78,12 @@ func (m *model) setEffort(level string) {
 }
 
 func (m *model) confirmReasoningCheck() tea.Cmd {
-	if m.running || m.sess.Agent == nil || m.sess.Agent.Model == nil {
+	if m.running || m.connection.Agent == nil || m.connection.Agent.Model == nil {
 		return m.openPaletteSub("Reasoning check unavailable", []paletteItem{
 			{title: "Use an idle, connected model first", action: func(m *model) tea.Cmd { return m.closePalette() }},
 		})
 	}
-	return m.openPaletteSub("Check reasoning · "+m.sess.Agent.Model.Ref.String(), []paletteItem{
+	return m.openPaletteSub("Check reasoning · "+m.connection.Agent.Model.Ref.String(), []paletteItem{
 		{title: "Cancel", action: func(m *model) tea.Cmd { return m.closePalette() }},
 		{title: "Run check", hint: "may incur cost", detail: fmt.Sprintf("Up to %d synthetic requests", provider.ReasoningCheckMaxRequests), action: func(m *model) tea.Cmd { return m.startReasoningCheck() }},
 		{title: "64 output tokens requested each"},
@@ -102,10 +102,10 @@ type reasoningCheckedMsg struct {
 }
 
 func (m *model) startReasoningCheck() tea.Cmd {
-	if m.running || m.sess.Agent == nil || m.sess.Agent.Model == nil {
+	if m.running || m.connection.Agent == nil || m.connection.Agent.Model == nil {
 		return m.confirmReasoningCheck()
 	}
-	mdl := m.sess.Agent.Model
+	mdl := m.connection.Agent.Model
 	ref := mdl.Ref
 	cmd := m.openPaletteSub("Checking reasoning · esc cancels", []paletteItem{
 		{title: "Cancel check", action: func(m *model) tea.Cmd { return m.closePalette() }},
@@ -124,7 +124,7 @@ func (m *model) startReasoningCheck() tea.Cmd {
 }
 
 func (m *model) reasoningChecked(msg reasoningCheckedMsg) tea.Cmd {
-	if m.pal != msg.owner || m.running || m.sess.Agent == nil || m.sess.Agent.Model != msg.model {
+	if m.pal != msg.owner || m.running || m.connection.Agent == nil || m.connection.Agent.Model != msg.model {
 		return nil // cancelled, superseded, or a different model/session
 	}
 	items := []paletteItem{{title: "Keep current settings", action: func(m *model) tea.Cmd { return m.closePalette() }}}
@@ -147,7 +147,7 @@ func (m *model) reasoningChecked(msg reasoningCheckedMsg) tea.Cmd {
 }
 
 func (m *model) useCheckedReasoning(msg reasoningCheckedMsg) tea.Cmd {
-	if m.running || m.sess.Agent == nil || m.sess.Agent.Model != msg.model {
+	if m.running || m.connection.Agent == nil || m.connection.Agent.Model != msg.model {
 		return m.closePalette()
 	}
 	next := *msg.model
@@ -170,8 +170,8 @@ func (m *model) useCheckedReasoning(msg reasoningCheckedMsg) tea.Cmd {
 		return m.sessionError(err)
 	}
 	msg.model.Ref, msg.model.Opts = next.Ref, next.Opts
-	m.sess.Name = next.Ref.String()
-	m.saveConv()
+	m.connection.Name = next.Ref.String()
+	m.saveSession()
 	m.refresh()
 	m.flash("checked reasoning saved · Default applies to the next request")
 	return m.openPaletteSub("Reasoning effort", effortItems(m))

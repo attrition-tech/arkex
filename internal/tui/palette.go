@@ -246,7 +246,7 @@ func (p *palette) activate(m *model) tea.Cmd {
 // paletteItems builds the top level from the current state.
 func (m *model) paletteItems() []paletteItem {
 	items := []paletteItem{
-		{group: "Session", title: "New conversation", hint: "/clear", aliases: "/new", cmd: "/clear", unavailable: idleRequired},
+		{group: "Session", title: "New session", hint: "/new", aliases: "/clear", cmd: "/new", unavailable: idleRequired},
 		{group: "Session", title: "Resume session", hint: "/resume", aliases: "/sessions", sub: sessionItems, unavailable: idleRequired},
 		{group: "Session", title: "Pending messages", hint: "/queue", sub: pendingItems},
 		{group: "Model", title: "Switch model", hint: "/model", sub: modelItems, unavailable: idleRequired},
@@ -287,7 +287,7 @@ func (m *model) paletteItems() []paletteItem {
 			if strings.TrimSpace(m.input.Value()) == "" && len(m.attachments) == 0 {
 				return "The composer is empty"
 			}
-			if m.sess.Agent == nil {
+			if m.connection.Agent == nil {
 				return "Connect a model first"
 			}
 			return ""
@@ -298,17 +298,17 @@ func (m *model) paletteItems() []paletteItem {
 		paletteItem{group: "Session", title: "Edit sent prompt", hint: "tab · e", searchOnly: true, sub: promptEditItems},
 		paletteItem{group: "Session", title: "Remove from prompt…", hint: "tab · delete", searchOnly: true, sub: promptRemoveItems},
 		paletteItem{group: "Session", title: "Rename session", hint: "/rename", cmd: "/rename", searchOnly: true, unavailable: func(m *model) string {
-			if m.conv == nil {
+			if m.session == nil {
 				return "Start or resume a session first"
 			}
 			return ""
 		}},
-		paletteItem{group: "Session", title: "Compact conversation", hint: "/compact", cmd: "/compact", searchOnly: true, unavailable: func(m *model) string {
+		paletteItem{group: "Session", title: "Compact session", hint: "/compact", cmd: "/compact", searchOnly: true, unavailable: func(m *model) string {
 			if reason := idleRequired(m); reason != "" {
 				return reason
 			}
-			if m.sess.Agent == nil || len(m.sess.Agent.Messages()) == 0 {
-				return "No conversation to compact"
+			if m.connection.Agent == nil || len(m.connection.Agent.Messages()) == 0 {
+				return "No session history to compact"
 			}
 			return ""
 		}},
@@ -351,7 +351,7 @@ func settingsItems(m *model) []paletteItem {
 			if reason := idleRequired(m); reason != "" {
 				return reason
 			}
-			if m.sess.Agent == nil || m.sess.Agent.Model == nil {
+			if m.connection.Agent == nil || m.connection.Agent.Model == nil {
 				return "Connect a model first"
 			}
 			return ""
@@ -378,7 +378,7 @@ func modelItems(m *model) []paletteItem {
 			id := pid + "/" + md.ID
 			hint := ""
 			switch id {
-			case m.sess.Name:
+			case m.connection.Name:
 				hint = "current"
 			case cfg.Default:
 				hint = "default"

@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -20,22 +23,22 @@ func TestTerminalTitleFollowsSession(t *testing.T) {
 	if got := m.View().WindowTitle; got != "New session - nsutm - arkex" {
 		t.Fatal(got)
 	}
-	m.conv = session.New(m.o.Cwd)
-	m.conv.Title = "Fix rendering"
+	m.session = session.New(m.o.Cwd)
+	m.session.Title = "Fix rendering"
 	if got := m.View().WindowTitle; got != "Fix rendering - nsutm - arkex" {
 		t.Fatal(got)
 	}
-	m.conv.Title = "Renamed session"
+	m.session.Title = "Renamed session"
 	m.openModels("")
 	if got := m.View().WindowTitle; got != "Renamed session - nsutm - arkex" {
 		t.Fatal("panel lost session title: " + got)
 	}
 	m.panel = nil
-	m.conv.Title = "\x1b]2;injected\a  Hello\n\tworld\x1b[31m"
+	m.session.Title = "\x1b]2;injected\a  Hello\n\tworld\x1b[31m"
 	if got := m.View().WindowTitle; got != "Hello world - nsutm - arkex" {
 		t.Fatalf("unsafe title: %q", got)
 	}
-	m.conv.Title = strings.Repeat("界", 40)
+	m.session.Title = strings.Repeat("界", 40)
 	got := m.View().WindowTitle
 	if ansi.StringWidth(got) > 64 || !strings.HasSuffix(got, "… - nsutm - arkex") {
 		t.Fatalf("long title: %q", got)
@@ -46,7 +49,7 @@ func TestTerminalTitleFollowsSession(t *testing.T) {
 		t.Fatalf("long active title: %q", got)
 	}
 	m.running = false
-	m.newConv()
+	m.resetSession()
 	if got := m.View().WindowTitle; got != "New session - nsutm - arkex" {
 		t.Fatal(got)
 	}
@@ -93,7 +96,7 @@ func TestResumeStatsBeforeFirstResponse(t *testing.T) {
 	m := footerModel(t)
 	for _, lastInput := range []int64{730, 0} {
 		s := session.New(m.o.Cwd)
-		s.Update(sampleMessages(), session.Usage{Model: m.sess.Name, Input: 50000, Output: 2000})
+		s.Update(sampleMessages(), session.Usage{Model: m.connection.Name, Input: 50000, Output: 2000})
 		s.LastInput = lastInput // zero omits the field, like legacy sessions
 		if err := s.Save(); err != nil {
 			t.Fatal(err)
@@ -126,12 +129,12 @@ func TestSaveAndResume(t *testing.T) {
 	h := &harness{model: m}
 	m.send = h.enqueue
 	ag := &agent.Agent{}
-	m.setSession(Connection{Agent: ag, Name: "local/a"})
+	m.setConnection(Connection{Agent: ag, Name: "local/a"})
 
 	// A turn: submit creates the session; the worker saves before runDone.
 	m.submit("fix the build", nil)
-	if m.conv == nil {
-		t.Fatal("submit must open a conversation")
+	if m.session == nil {
+		t.Fatal("submit must open a session")
 	}
 	ag.SetMessages(sampleMessages())
 	m.usageIn, m.usageOut, m.lastInput = 42, 7, 17
@@ -145,30 +148,45 @@ func TestSaveAndResume(t *testing.T) {
 	}
 	id := list[0].ID
 
-	// /clear starts a new conversation; the old one stays on disk.
-	_, cmd := m.command("/clear")
-	h.drive(cmd)
-	if m.conv != nil || len(m.sess.Agent.Messages()) != 0 || len(m.blocks) != 1 {
-		t.Fatal("/clear must reset the conversation")
+	dir, err := session.Dir(m.o.Cwd)
+	if err != nil {
+		t.Fatal(err)
 	}
+	path := filepath.Join(dir, id+".json")
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Both spellings start a fresh session without changing the saved one.
+	for _, command := range []string{"/new", "/clear"} {
+		_, cmd := m.command(command)
+		h.drive(cmd)
+		if m.session != nil || len(m.connection.Agent.Messages()) != 0 || len(m.blocks) != 1 {
+			t.Fatalf("%s must reset the active session", command)
+		}
+		after, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(before, after) {
+			t.Fatalf("%s changed the saved session: %v", command, err)
+		}
 
-	// Resume with a different model rebuilds everything.
-	m.setSession(Connection{Agent: ag, Name: "local/b"})
-	_, cmd = m.command("/resume " + id)
-	h.drive(cmd)
-	if m.conv == nil || m.conv.ID != id || len(m.sess.Agent.Messages()) != 4 || m.sess.Name != "local/a" {
-		t.Fatalf("resume did not restore the agent: conv=%v model=%s", m.conv, m.sess.Name)
-	}
-	if m.usageIn != 42 || m.lastInput != 17 {
-		t.Fatalf("usage not restored: in=%d last=%d", m.usageIn, m.lastInput)
-	}
-	if got := len(m.blocks); got != 1+5 { // welcome + 5 rebuilt; notices are not transcript blocks
-		t.Fatalf("blocks = %d", got)
+		// Resume with a different model rebuilds everything.
+		m.setConnection(Connection{Agent: ag, Name: "local/b"})
+		_, cmd = m.command("/resume " + id)
+		h.drive(cmd)
+		if m.session == nil || m.session.ID != id || len(m.connection.Agent.Messages()) != 4 || m.connection.Name != "local/a" {
+			t.Fatalf("resume did not restore the agent: session=%v model=%s", m.session, m.connection.Name)
+		}
+		if m.usageIn != 42 || m.lastInput != 17 {
+			t.Fatalf("usage not restored: in=%d last=%d", m.usageIn, m.lastInput)
+		}
+		if got := len(m.blocks); got != 1+5 { // welcome + 5 rebuilt; notices are not transcript blocks
+			t.Fatalf("blocks = %d", got)
+		}
 	}
 
 	// The next turn appends to the same session file rather than a new one.
 	m.submit("thanks", nil)
-	if err := m.persistence.finish(t.Context(), m.sess.Agent.Messages(), fantasy.Usage{}, 17, nil); err != nil {
+	if err := m.persistence.finish(t.Context(), m.connection.Agent.Messages(), fantasy.Usage{}, 17, nil); err != nil {
 		t.Fatal(err)
 	}
 	h.drive(func() tea.Msg { return runDoneMsg{} })
@@ -192,27 +210,27 @@ func TestSaveAndResume(t *testing.T) {
 	if len(fresh.start.recent) != 1 || fresh.start.recent[0].ID != id || fresh.start.recent[0].Title != "fix the build" {
 		t.Fatalf("recent sessions = %+v", fresh.start.recent)
 	}
-	if fresh.conv == nil || fresh.conv.ID != id {
+	if fresh.session == nil || fresh.session.ID != id {
 		t.Fatal("Resume: latest must load the session at startup")
 	}
 }
 
-func TestModelSwitchCarriesConversation(t *testing.T) {
+func TestModelSwitchPreservesSession(t *testing.T) {
 	t.Setenv("ARKEX_HOME", t.TempDir())
 	m, _ := testModel(t)
 	a := &agent.Agent{}
-	m.setSession(Connection{Agent: a, Name: "local/a"})
+	m.setConnection(Connection{Agent: a, Name: "local/a"})
 	m.submit("fix the build", nil)
 	a.SetMessages(sampleMessages())
 	m.Update(runDoneMsg{})
-	id := m.conv.ID
+	id := m.session.ID
 
 	// Same provider: everything, including reasoning, moves to the new
 	// agent and the session file stays the same.
 	b := &agent.Agent{}
 	m.Update(connectedMsg{sel: "local/b", name: "local/b", conn: Connection{Agent: b, Name: "local/b"}})
-	if m.sess.Agent != b || m.conv == nil || m.conv.ID != id {
-		t.Fatalf("switch must keep the session: conv=%v", m.conv)
+	if m.connection.Agent != b || m.session == nil || m.session.ID != id {
+		t.Fatalf("switch must keep the session: session=%v", m.session)
 	}
 	if got := b.Messages(); len(got) != 4 || len(got[1].Content) != 3 {
 		t.Fatalf("same-provider switch must carry all parts, got %+v", got)

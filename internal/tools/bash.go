@@ -21,7 +21,7 @@ const (
 // Bash runs a shell command in Dir.
 type Bash struct {
 	Dir     string
-	TempDir string // conversation-owned scratch
+	TempDir string // session-owned scratch
 	Limits  SandboxLimits
 	// Shell overrides the shell binary; defaults to $SHELL or a discovered
 	// POSIX shell.

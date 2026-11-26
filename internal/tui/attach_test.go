@@ -35,7 +35,7 @@ func TestImageMentionBecomesChipAndFilePart(t *testing.T) {
 		t.Fatal(err)
 	}
 	ag := &agent.Agent{}
-	m.setSession(Connection{Agent: ag, Name: "fake/m"})
+	m.setConnection(Connection{Agent: ag, Name: "fake/m"})
 
 	// Typing the mention and pressing enter: the image is split out, the
 	// text file is expanded inline as before.
@@ -77,7 +77,7 @@ func TestAttachmentChipsKeyboardAndMouse(t *testing.T) {
 	m.layout()
 	writeImage(t, m.o.Cwd, "a.png")
 	writeImage(t, m.o.Cwd, "b.jpg")
-	m.setSession(Connection{Agent: &agent.Agent{}, Name: "fake/m"})
+	m.setConnection(Connection{Agent: &agent.Agent{}, Name: "fake/m"})
 
 	// Dropped file paths arrive as a paste.
 	m.Update(tea.PasteMsg{Content: filepath.Join(m.o.Cwd, "a.png") + " "})

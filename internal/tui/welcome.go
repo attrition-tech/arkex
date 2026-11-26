@@ -157,6 +157,8 @@ func (m *model) welcomeView() tea.View {
 		}
 	} else if box, x, y := m.noticeBox(); box != "" {
 		v.Content = overlay(content, box, x, y)
+	} else if box, x, y := m.statsBox(); box != "" {
+		v.Content = overlay(content, box, x, y)
 	}
 	if m.start.focus == 0 {
 		if c := m.input.Cursor(); c != nil {

@@ -14,8 +14,6 @@ import (
 const flashDelay = 5 * time.Second
 const confirmDelay = 2 * time.Second
 
-const assumedContextNotice = "Assumed context limit: 256k (262,144 tokens). No model limit is available. Auto-compaction starts at 80%. Set contextWindow to your server's actual limit. The token usage count is server-reported."
-
 type flashClearMsg struct{ gen int }
 
 func (m *model) disarmConfirmation() {
@@ -82,17 +80,11 @@ func (m *model) flashTimer() tea.Cmd {
 // above approvals; ordinary notices yield to dialogs.
 func (m *model) noticeBox() (box string, x, y int) {
 	message := m.flashText
-	if message == "" && m.hoverAct == actContext && m.sess.Agent != nil && m.sess.Agent.ContextWindowAssumed() {
-		message = assumedContextNotice
-	}
 	if message == "" || m.pal != nil || m.panel != nil || (m.pending != nil && m.confirmKey == "") || m.comp != nil || m.width < 10 || m.vp.Height() < 4 {
 		return "", 0, 0
 	}
 	w := min(64, m.width-4)
 	rows := 2
-	if message == assumedContextNotice {
-		rows = min(8, m.vp.Height()-2)
-	}
 	text := ansi.Truncate(message, rows*(w-4), "…")
 	text = ansi.Wrap(text, w-4, "")
 	lines := strings.Split(text, "\n")
@@ -116,6 +108,9 @@ func (m *model) noticeHit(x, y int) bool {
 // from the transcript. Notices keep their corner; lift this box if they overlap.
 func (m *model) scrollBox() (box string, x, y int) {
 	below := m.vp.maxOff() - m.vp.YOffset()
+	if m.stats.open && m.statsAllowed() {
+		return "", 0, 0
+	}
 	if below <= 0 || m.pal != nil || m.panel != nil || m.pending != nil || m.comp != nil || m.width < 10 || m.vp.Height() < 4 {
 		return "", 0, 0
 	}

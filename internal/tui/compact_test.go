@@ -236,8 +236,9 @@ func TestAutoCompactBeforePromptWhenContextIsNearlyFull(t *testing.T) {
 	if m.lastInput != 8500 || m.sess.Agent.LastInput() != 8500 {
 		t.Fatalf("lastInput=%d agent=%d", m.lastInput, m.sess.Agent.LastInput())
 	}
-	if f := ansi.Strip(m.footer()); !strings.Contains(f, "85%") {
-		t.Fatalf("footer = %q", f)
+	m.command("/stats")
+	if f := ansi.Strip(m.View().Content); !strings.Contains(f, "85%") {
+		t.Fatalf("stats = %q", f)
 	}
 
 	m.setInput("and now?")
@@ -304,7 +305,8 @@ func TestGatewayUsageSurvivesStatsAndCompacts(t *testing.T) {
 			if tc.cached && m.usageIn != 50 {
 				t.Fatalf("uncached billing changed: %d", m.usageIn)
 			}
-			if tc.window == 0 && (!strings.Contains(ansi.Strip(m.footer()), "ctx*") || m.sess.Agent.Model.Ref.Model.ContextWindow != 0) {
+			m.command("/stats")
+			if tc.window == 0 && (!strings.Contains(ansi.Strip(m.View().Content), "Limit assumed") || m.sess.Agent.Model.Ref.Model.ContextWindow != 0) {
 				t.Fatal("fallback must be labelled and not persisted as confirmed")
 			}
 			m.setInput("continue")
@@ -328,8 +330,8 @@ func TestManualCompactCommand(t *testing.T) {
 	_, cmd := m.Update(key("enter"))
 	m.drive(cmd)
 	_, cmd = m.command("/compact")
-	if !m.compacting || !strings.Contains(ansi.Strip(m.footer()), "compacting") {
-		t.Fatal("manual compaction must animate before waiting for the response")
+	if !m.compacting || !strings.Contains(ansi.Strip(m.footer()), "Compacting") {
+		t.Fatal("manual compaction status must appear before waiting for the response")
 	}
 	m.drive(cmd)
 	if m.compacting || len(lm.requests) != 2 || !strings.Contains(transcript(m.model), "context compacted") {

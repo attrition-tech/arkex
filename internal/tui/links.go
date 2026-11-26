@@ -65,7 +65,7 @@ func renderedLinks(lines []string) []linkSpan {
 
 func (m *model) linkAt(x, y int) string {
 	if !m.mouse || x < 0 || x >= m.width-1 || y < 0 || y >= m.vp.Height() ||
-		m.pal != nil || m.panel != nil || m.pending != nil || m.comp != nil || m.noticeHit(x, y) || m.scrollHit(x, y) {
+		m.pal != nil || m.panel != nil || m.pending != nil || m.comp != nil || m.noticeHit(x, y) || m.scrollHit(x, y) || m.statsHit(x, y) {
 		return ""
 	}
 	line := m.vp.YOffset() + y

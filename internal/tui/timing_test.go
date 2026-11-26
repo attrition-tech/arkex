@@ -35,31 +35,32 @@ func TestResponseTimingBoundariesAndRetries(t *testing.T) {
 	r := responseTiming{start: start}
 	check := func(now time.Duration, running bool, want string) {
 		t.Helper()
-		if got := r.footer(at(now), running); got != want {
+		first, llm, total := r.values(at(now), running)
+		if got := strings.Join([]string{first, llm, total}, " | "); got != want {
 			t.Fatalf("got %q, want %q", got, want)
 		}
 	}
-	check(120*time.Millisecond, true, "First text 120ms… · LLM first text pending · Total 120ms…")
+	check(120*time.Millisecond, true, "120ms… | pending | 120ms…")
 	r.observe(agent.RequestSent{At: at(200 * time.Millisecond)})
 	r.observe(agent.ReasoningDelta{Text: "thinking"})
 	r.observe(agent.TextDelta{At: at(300 * time.Millisecond)}) // empty chunk
-	check(800*time.Millisecond, true, "First text 800ms… · LLM first text 600ms… · Total 800ms…")
+	check(800*time.Millisecond, true, "800ms… | 600ms… | 800ms…")
 	// A tool-only or failed attempt must not supply the answer request's timer.
 	r.observe(agent.RequestTiming{Total: time.Second})
 	r.observe(agent.RequestRestart{})
-	check(2*time.Second, true, "First text 2s… · LLM first text pending · Total 2s…")
+	check(2*time.Second, true, "2s… | pending | 2s…")
 	r.observe(agent.RequestSent{At: at(2100 * time.Millisecond)})
 	r.observe(agent.TextDelta{Text: "first", At: at(2900 * time.Millisecond)})
 	// A retry after partial text preserves the user's actual first-text wait.
 	r.observe(agent.RequestRestart{})
 	r.observe(agent.RequestSent{At: at(4 * time.Second)})
 	r.observe(agent.TextDelta{Text: "last", At: at(5 * time.Second)})
-	check(6*time.Second, true, "First text 2.9s · LLM first text 800ms · Total 6s…")
+	check(6*time.Second, true, "2.9s | 800ms | 6s…")
 	// Trailing usage packets and UI delays must not inflate last-text receipt.
-	check(9*time.Second, false, "First text 2.9s · LLM first text 800ms · Total 5s")
+	check(9*time.Second, false, "2.9s | 800ms | 5s")
 	r = responseTiming{start: start}
 	r.observe(agent.TextDelta{Text: "no HTTP trace", At: at(time.Second)})
-	check(2*time.Second, false, "First text 1s · LLM first text — · Total 1s")
+	check(2*time.Second, false, "1s | — | 1s")
 }
 
 func TestResponseTimingLiveAndCompletedRendering(t *testing.T) {
@@ -76,24 +77,27 @@ func TestResponseTimingLiveAndCompletedRendering(t *testing.T) {
 		m.applyEvent(agent.TurnStart{Step: 1})
 		m.applyEvent(agent.RequestSent{At: time.Now()})
 		time.Sleep(650 * time.Millisecond)
-		plain := func(width int) string { return ansi.Strip(strings.Join(m.renderBlocks(width), "\n")) }
-		if got := plain(100); !strings.Contains(got, "First text 1s… · LLM first text 650ms… · Total 1s…") {
+		m.command("/stats")
+		plain := func() string { return strings.Join(strings.Fields(ansi.Strip(m.View().Content)), " ") }
+		if got := plain(); !strings.Contains(got, "First answer 1s…") || !strings.Contains(got, "LLM first answer 650ms…") {
 			t.Fatal(got)
 		}
 		m.applyEvent(agent.TextDelta{Text: "Hello back!", At: time.Now()})
 		time.Sleep(72 * time.Second)
 		m.workingFrame(workingMsg{gen: m.runGen})
-		if got := plain(100); !strings.Contains(got, "First text 1s · LLM first text 650ms · Total 1m 13s…") {
+		if got := plain(); !strings.Contains(got, "Answer elapsed 1m 13s…") || !strings.Contains(got, "First answer 1s") {
 			t.Fatal(got)
 		}
 		m.applyEvent(agent.TextDelta{Text: " Done.", At: time.Now()})
 		time.Sleep(2 * time.Second)
 		m.Update(runDoneMsg{})
-		want := "First text 1s · LLM first text 650ms · Total 1m 13s"
+		if got := plain(); !strings.Contains(got, "Answer elapsed 1m 13s") || !strings.Contains(got, "Run elapsed 1m 15s") || strings.Contains(got, "1m 15s…") {
+			t.Fatalf("completed stats must distinguish answer from run duration: %s", got)
+		}
 		for _, width := range []int{100, 40} {
 			lines := m.renderBlocks(width)
 			got := strings.Join(strings.Fields(ansi.Strip(strings.Join(lines, "\n"))), " ")
-			if !strings.Contains(got, want) || strings.Count(got, "First text") != 1 {
+			if strings.Contains(got, "First text") || strings.Contains(got, "First answer") {
 				t.Fatalf("width %d: %s", width, got)
 			}
 			for _, line := range lines {
@@ -101,9 +105,6 @@ func TestResponseTimingLiveAndCompletedRendering(t *testing.T) {
 					t.Fatalf("overflow: %q", line)
 				}
 			}
-		}
-		if !m.responseTiming.start.IsZero() {
-			t.Fatal("completed run retained live counters")
 		}
 		m.startRun(func(context.Context, *agent.Agent, func(agent.Event)) error { return nil })
 		if !m.responseTiming.firstText.IsZero() || !m.responseTiming.requestSent.IsZero() {
@@ -119,7 +120,11 @@ func TestResponseTimingDoesNotLabelIncompleteRunsAsComplete(t *testing.T) {
 		m.startedAt, m.running = start, true
 		m.responseTiming = responseTiming{start: start}
 		m.applyEvent(agent.TextDelta{Text: "partial", At: time.Now()})
+		m.command("/stats")
 		m.Update(runDoneMsg{err: err})
+		if strings.Contains(m.View().Content, "Session stats") {
+			t.Fatalf("stats obscured the %v notice", err)
+		}
 		if got := ansi.Strip(strings.Join(m.renderBlocks(100), "\n")); strings.Contains(got, "First text") {
 			t.Fatalf("completion footer on %v: %s", err, got)
 		}

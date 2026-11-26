@@ -413,41 +413,35 @@ func TestInputViewCacheTracksEveryVisibleChange(t *testing.T) {
 func TestFooterCacheTracksEveryVisibleChange(t *testing.T) {
 	m, _ := testModel(t)
 	m.sess.Name = "local/model"
-	m.sess.Agent = &agent.Agent{Model: &provider.Model{}} // gives the ctx gauge a window to read
+	m.sess.Agent = &agent.Agent{Model: &provider.Model{}}
 	drop := func() { m.footerCache.view = "" }
 	render := m.footer
 
 	first := render()
-	if render() != first || !strings.Contains(ansi.Strip(first), "/ or cmd+p for command palette") {
+	if render() != first || !strings.Contains(ansi.Strip(first), "model ▾") {
 		t.Fatalf("initial footer not cached or wrong: %q", ansi.Strip(first))
 	}
-	m.setInput("typing hides the hints")
-	v := checkCached(t, "typing", first, render, drop)
-	if strings.Contains(ansi.Strip(v), "/ or cmd+p for command palette") {
-		t.Fatalf("hints must hide while typing: %q", ansi.Strip(v))
+	m.setInput("typing does not change the toolbar")
+	if render() != first {
+		t.Fatal("typing changed the footer")
 	}
 	m.setInput("")
 	m.hoverAct = actModel
-	v = checkCached(t, "hover", v, render, drop)
+	v := checkCached(t, "hover", first, render, drop)
 	m.hoverAct = actNone
 	m.status = "thinking"
 	v = checkCached(t, "status", v, render, drop)
+	m.status = ""
 	m.running, m.startedAt = true, time.Now().Add(-2100*time.Millisecond)
 	v = checkCached(t, "running", v, render, drop)
-	if !strings.Contains(ansi.Strip(v), "2s") {
-		t.Fatalf("elapsed missing: %q", ansi.Strip(v))
-	}
-	m.startedAt = m.startedAt.Add(-time.Second) // now 3s: a new second must redraw
-	v = checkCached(t, "elapsed", v, render, drop)
+	m.startedAt = m.startedAt.Add(-time.Second)
 	m.usageIn, m.usageOut = 10, 20
-	v = checkCached(t, "usage", v, render, drop)
 	m.sess.Agent.SetContextWindow(1000)
 	m.lastInput = 250
-	v = checkCached(t, "ctx", v, render, drop)
-	if !strings.Contains(ansi.Strip(v), "25%") {
-		t.Fatalf("ctx gauge missing: %q", ansi.Strip(v))
+	if render() != v {
+		t.Fatal("hidden stats changed the footer")
 	}
-	m.width = 80
+	m.width = 40
 	v = checkCached(t, "width", v, render, drop)
 	t.Cleanup(func() { applyTheme(themes[0]) })
 	dracula, _ := themeByName("dracula")

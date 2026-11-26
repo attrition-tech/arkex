@@ -64,6 +64,7 @@ const (
 )
 
 func (m *model) openPalette() tea.Cmd {
+	m.dismissStats()
 	if m.pal != nil && m.pal.cancel != nil {
 		m.pal.cancel()
 	}
@@ -320,6 +321,7 @@ func (m *model) paletteItems() []paletteItem {
 			}
 			return ""
 		}},
+		paletteItem{group: "Session", title: "Session stats", hint: "/stats", aliases: "context tokens usage", cmd: "/stats", searchOnly: true},
 		paletteItem{group: "Session", title: "Run timing", hint: "/timing", sub: timingItems, searchOnly: true},
 		paletteItem{group: "More", title: "Quit", hint: "/quit", aliases: "/exit /q", cmd: "/quit", searchOnly: true},
 	)

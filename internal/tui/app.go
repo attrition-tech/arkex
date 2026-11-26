@@ -223,11 +223,12 @@ type model struct {
 	}
 	footerHits []footerHit  // toolbar pill positions from the last render
 	hoverAct   footerAction // toolbar pill under the mouse, actNone when none
-	hoverBlock *block       // tool, reasoning card, or reply under the mouse
-	hoverCode  int          // one-based copy control in hoverBlock
-	hoverGroup *block       // group header, identified by its first member
-	hoverWork  *block       // completed-turn Work header
-	pointer    *pos         // last mouse position, in screen coordinates
+	stats      statsPanel
+	hoverBlock *block // tool, reasoning card, or reply under the mouse
+	hoverCode  int    // one-based copy control in hoverBlock
+	hoverGroup *block // group header, identified by its first member
+	hoverWork  *block // completed-turn Work header
+	pointer    *pos   // last mouse position, in screen coordinates
 
 	vp     scroller
 	input  textarea.Model
@@ -398,6 +399,9 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 	}
 	gen := m.flashGen
 	defer func() {
+		if !m.statsAllowed() {
+			m.dismissStats()
+		}
 		// Actions can replace the notice without threading a timer through
 		// every command handler. Only a new notice schedules a one-shot tick.
 		if gen != m.flashGen {
@@ -409,6 +413,16 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 		}
 	}()
 	switch msg := msg.(type) {
+	case statsHoverMsg:
+		if msg.gen == m.stats.gen && !m.stats.pinned && m.statsAllowed() && m.stats.open != msg.show {
+			m.stats.open = msg.show
+			m.stats.offset = 0
+		}
+		return m, nil
+	case tea.BlurMsg:
+		m.dismissStats()
+		m.stats.hovered = false
+		return m, nil
 	case rollMsg:
 		if msg.gen != m.runGen {
 			return m, nil
@@ -426,12 +440,33 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 		m.refresh()
 		return m, nil
 	case tea.WindowSizeMsg:
+		if !m.stats.pinned {
+			m.dismissStats()
+			m.stats.hovered = false
+		}
 		m.width, m.height = msg.Width, msg.Height
 		m.resizeInput()
 		m.ready = true
 		return m, nil
 
 	case tea.KeyPressMsg:
+		if m.stats.open && msg.String() == "esc" {
+			m.dismissStats()
+			m.disarmConfirmation()
+			return m, nil
+		}
+		if m.stats.open && m.stats.pinned {
+			switch msg.String() {
+			case "pgup":
+				m.stats.offset = max(0, m.stats.offset-max(1, m.vp.Height()-3))
+				return m, nil
+			case "pgdown":
+				m.stats.offset += max(1, m.vp.Height()-3)
+				return m, nil
+			}
+		} else {
+			m.dismissStats()
+		}
 		if msg.String() != m.confirmKey {
 			m.disarmConfirmation()
 		}
@@ -560,10 +595,6 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 		m.refreshPendingPalette()
 		m.cancel = nil
 		m.step = 0
-		if msg.err == nil && !m.responseTiming.firstText.IsZero() {
-			m.appendSystem(m.responseTiming.footer(time.Now(), false))
-		}
-		m.responseTiming = responseTiming{}
 		var paused *agent.PausedError
 		if errors.As(msg.err, &paused) {
 			m.paused = true
@@ -640,6 +671,9 @@ func (m *model) Update(msg tea.Msg) (next tea.Model, cmd tea.Cmd) {
 	}
 
 	if p, ok := msg.(tea.PasteMsg); ok {
+		if !m.stats.pinned {
+			m.dismissStats()
+		}
 		m.disarmConfirmation()
 		m.promptFocus = nil
 		if m.pending != nil || m.panel != nil {
@@ -926,6 +960,11 @@ func (m *model) command(text string) (tea.Model, tea.Cmd) {
 		return m, m.renameSession(m.conv.ID, strings.TrimSpace(strings.TrimPrefix(text, "/rename")))
 	case "/compact":
 		return m, m.compact()
+	case "/stats":
+		m.disarmConfirmation()
+		m.flashText = ""
+		m.dismissStats()
+		m.stats.open, m.stats.pinned = true, true
 	case "/timing":
 		return m, m.openPaletteSub("Run timing (current session)", timingItems(m))
 	case "/queue":
@@ -1067,6 +1106,7 @@ func (m *model) startRunAt(sentAt time.Time, fn func(context.Context, *agent.Age
 		return nil
 	}
 	m.disarmConfirmation()
+	m.dismissStats()
 	m.liveCut, m.rollFrom = 0, 0
 	m.rollAt, m.rollScheduled = time.Time{}, false
 	m.rollPaused = time.Time{}
@@ -1283,10 +1323,12 @@ func (m *model) setInput(text string) {
 }
 
 func (m *model) appendSystem(s string) {
+	m.dismissStats()
 	m.blocks = append(m.blocks, newBlock(blockSystem, s))
 }
 
 func (m *model) replaceTranscript(blocks []*block) {
+	m.dismissStats()
 	m.blocks = blocks
 	m.promptFocus = nil
 	m.openDetail, m.openGroup, m.openWork = nil, nil, nil
@@ -1611,12 +1653,6 @@ func (m *model) renderBlocks(width int) []string {
 		b := newBlock(blockSystem, m.retry.Reason)
 		lines = append(lines, m.blockLines(b, inner, false)...)
 	}
-	if m.running && !m.responseTiming.start.IsZero() {
-		// Use the ordinary muted block renderer so narrow terminals wrap the
-		// three measurements rather than truncating the final counter.
-		b := newBlock(blockSystem, m.responseTiming.footer(time.Now(), true))
-		lines = append(lines, m.blockLines(b, inner, false)...)
-	}
 	// Shorter transcripts must release hidden backing-array references too.
 	if len(lines) < len(m.lineBuf) {
 		clear(m.lineBuf[len(lines):])
@@ -1894,7 +1930,10 @@ func (m *model) windowTitle() string {
 }
 
 func (m *model) View() (v tea.View) {
-	defer func() { v.WindowTitle = m.windowTitle() }()
+	defer func() {
+		v.WindowTitle = m.windowTitle()
+		v.ReportFocus = true
+	}()
 	if !m.ready {
 		return tea.NewView("")
 	}
@@ -1943,6 +1982,9 @@ func (m *model) View() (v tea.View) {
 			copy(tl[len(tl)-len(pl):], pl)
 			transcript = strings.Join(tl, "\n")
 		}
+	}
+	if box, x, y := m.statsBox(); box != "" {
+		transcript = overlay(transcript, box, x, y)
 	}
 	if box, x, y := m.noticeBox(); box != "" {
 		transcript = overlay(transcript, box, x, y)

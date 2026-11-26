@@ -88,7 +88,7 @@ func TestBlocksFromMessages(t *testing.T) {
 	}
 }
 
-func TestResumeGaugeBeforeFirstResponse(t *testing.T) {
+func TestResumeStatsBeforeFirstResponse(t *testing.T) {
 	t.Setenv("ARKEX_HOME", t.TempDir())
 	m := footerModel(t)
 	for _, lastInput := range []int64{730, 0} {
@@ -99,15 +99,16 @@ func TestResumeGaugeBeforeFirstResponse(t *testing.T) {
 			t.Fatal(err)
 		}
 		m.command("/resume " + s.ID)
+		m.command("/stats")
 		want := "73%"
 		if lastInput == 0 {
-			want = "ctx ?"
+			want = "— / 1000 tokens"
 		}
-		if got := ansi.Strip(m.footer()); !strings.Contains(got, want) || strings.Contains(got, "0%") {
-			t.Fatalf("last=%d footer=%q", lastInput, got)
+		if got := ansi.Strip(m.View().Content); !strings.Contains(got, want) || strings.Contains(got, "0%") {
+			t.Fatalf("last=%d stats=%q", lastInput, got)
 		}
 		m.applyEvent(agent.TurnEnd{Usage: fantasy.Usage{InputTokens: 810}})
-		if got := ansi.Strip(m.footer()); !strings.Contains(got, "81%") {
+		if got := ansi.Strip(m.View().Content); !strings.Contains(got, "81%") {
 			t.Fatalf("fresh measurement not shown: %q", got)
 		}
 	}

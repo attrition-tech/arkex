@@ -31,48 +31,6 @@ func TestNoticeUsesRoundedBorderWithoutBackground(t *testing.T) {
 	}
 }
 
-func TestAssumedContextHover(t *testing.T) {
-	m := footerModel(t)
-	m.sess.Agent.SetContextWindow(0)
-	m.setInput("draft stays here")
-	before := m.View().Content
-	count, offset := len(m.blocks), m.vp.YOffset()
-	motion(m, hitCenter(t, m, actContext), m.toolbarY())
-	box, _, _ := m.noticeBox()
-	plain := strings.Join(strings.Fields(ansi.Strip(box)), " ")
-	for _, part := range []string{"Assumed context limit: 256k", "80%", "contextWindow", "server-reported"} {
-		if !strings.Contains(plain, part) {
-			t.Fatalf("tooltip missing %q: %s", part, plain)
-		}
-	}
-	if m.flashText != "" || len(m.blocks) != count || m.vp.YOffset() != offset || m.input.Value() != "draft stays here" {
-		t.Fatal("hover must not mutate notices, transcript or draft")
-	}
-	motion(m, 0, m.statusY())
-	if m.View().Content != before {
-		t.Fatal("leaving gauge must restore original view")
-	}
-	motion(m, hitCenter(t, m, actContext), m.toolbarY())
-	m.flash("Press Esc again to stop")
-	if box, _, _ := m.noticeBox(); strings.Contains(box, "Assumed") || !strings.Contains(box, "Press Esc") {
-		t.Fatal("tooltip must yield to notices")
-	}
-	m.flashText = ""
-	m.sess.Agent.SetContextWindow(262144)
-	if box, _, _ := m.noticeBox(); box != "" || strings.Contains(ansi.Strip(m.footer()), "ctx*") {
-		t.Fatal("known window must not show estimated marker or tooltip")
-	}
-	m.sess.Agent.SetContextWindow(0)
-	for _, size := range [][2]int{{120, 30}, {60, 20}, {24, 8}} {
-		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
-		m.hoverAct = actContext
-		box, x, y := m.noticeBox()
-		if box != "" && (x < 0 || y < 0 || x+lipgloss.Width(box) > m.width || y+lipgloss.Height(box) > m.vp.Height()) {
-			t.Fatalf("tooltip outside viewport at %v", size)
-		}
-	}
-}
-
 func TestNoticeReplacesExpiresAndRestoresTranscript(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		m, _ := testModel(t)

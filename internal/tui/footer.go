@@ -10,27 +10,15 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// The footer is everything under the transcript:
-//
-//	╭──────────────────────────────────────────────────────╮
-//	│ › Ask anything…                                      │  input box
-//	╰──────────────────────────────────────────────────────╯
-//	 AUTO ▾  Qwen3.8-Flash ▾  write the page ▾   ctx ▰▰▱▱ 45% · 1.2M↑ 30k↓   toolbar
-//	 enter send · shift+enter newline · / commands           status / hints
-//
-// Every toolbar pill is also the control for what it shows: clicking opens
-// the matching picker. footerHits records where the pills landed in the
-// last render so a click can be mapped back to one.
-
-// footerAction is what a toolbar pill does when clicked.
+// The footer keeps model and effort controls beneath the input box. Its
+// second row is reserved for actionable status, so notices do not reflow
+// the transcript. Statistics live in the model's hover panel instead.
 type footerAction int
 
 const (
 	actNone footerAction = iota
 	actModel
 	actEffort
-	actSession
-	actContext
 )
 
 type footerHit struct {
@@ -38,35 +26,24 @@ type footerHit struct {
 	act    footerAction
 }
 
-// footerKey captures everything the two footer rows depend on; elapsed is
-// in whole seconds because that is the displayed precision.
+// Statistics do not invalidate the toolbar cache on every usage update.
 type footerKey struct {
-	status, name, conv string
-	effort             string
-	running, paused    bool
-	elapsed            int64
-	usageIn, usageOut  int64
-	lastInput          int64
-	ctx, width, gen    int
-	assumed            bool
-	compacting         bool
-	compactFrame       int
-	inputRows          int    // when the input text is taller than its box
-	inputEmpty         bool   // hints show only while nothing is typed
-	panel              string // panel legend replaces the hints while a panel is open
-	pending            bool   // approval prompt up: its keys replace the hints
-	retry              bool
-	hover              footerAction
-	inbox              string
-	messageFocus       bool
-	link               string
+	status, name    string
+	effort          string
+	running, paused bool
+	width, gen      int
+	inputRows       int
+	panel           string
+	pending, retry  bool
+	hover           footerAction
+	inbox           string
+	messageFocus    bool
+	link            string
 }
 
-// footerRows is the height of the toolbar plus the status line.
 const footerRows = 2
 
-// boxRows is the height of the input box including its borders; 0 while
-// the Connections panel replaces it.
+// boxRows includes the input's borders; approvals replace the input box.
 func (m *model) boxRows() int {
 	if m.panel != nil {
 		return 0
@@ -77,39 +54,24 @@ func (m *model) boxRows() int {
 	return m.inputBoxRows() + 2
 }
 
-// Rows of the footer parts, counted from the top of the screen.
 func (m *model) chipRowY() int { return m.vp.Height() + 1 }
 func (m *model) toolbarY() int { return m.vp.Height() + m.boxRows() }
 func (m *model) statusY() int  { return m.toolbarY() + 1 }
 
-// footer renders the toolbar and the status line, reusing the previous
-// render while nothing they show has changed (View runs on every message).
 func (m *model) footer() string {
-	var elapsed time.Duration
-	if m.running {
-		elapsed = time.Since(m.startedAt).Round(time.Second)
-	}
 	name := m.sess.Name
 	if m.sess.Agent != nil && m.sess.Agent.Model != nil && m.sess.Agent.Model.Ref.Thinking != "" {
 		name = strings.TrimSuffix(name, ":"+m.sess.Agent.Model.Ref.Thinking)
 	}
 	key := footerKey{
-		status: m.status, name: name, conv: m.convTitle(), running: m.running, paused: m.paused,
-		effort:  m.effortLabel(),
-		elapsed: int64(elapsed / time.Second),
-		usageIn: m.usageIn, usageOut: m.usageOut, lastInput: m.lastInput,
-		ctx: m.contextWindow(), width: m.width, gen: themeGen,
-		assumed:    m.sess.Agent != nil && m.sess.Agent.ContextWindowAssumed(),
-		compacting: m.compacting,
-		inputEmpty: m.input.Value() == "" && len(m.attachments) == 0,
-		hover:      m.hoverAct, pending: m.pending != nil,
+		status: m.status, name: name, running: m.running, paused: m.paused,
+		effort: m.effortLabel(), width: m.width, gen: themeGen,
+		hover: m.hoverAct, pending: m.pending != nil,
 		retry:        m.pending != nil && m.pending.title != "",
 		messageFocus: m.promptFocus != nil,
 		link:         m.hoveredLink(),
 	}
 	if m.conv != nil {
-		key.usageIn += m.conv.TitleUsageIn
-		key.usageOut += m.conv.TitleUsageOut
 		steers := 0
 		for _, input := range m.conv.Pending {
 			if input.Steer {
@@ -130,11 +92,8 @@ func (m *model) footer() string {
 	if m.inputRows > m.input.Height() {
 		key.inputRows = m.inputRows
 	}
-	if m.compacting {
-		key.compactFrame = m.frame % 8
-		if key.status == "" {
-			key.status = fmt.Sprintf("Compacting · %s · %s · esc twice cancels", m.compactStage, time.Since(m.compactStarted).Round(time.Second))
-		}
+	if m.compacting && key.status == "" {
+		key.status = fmt.Sprintf("Compacting · %s · %s · esc twice cancels", m.compactStage, time.Since(m.compactStarted).Round(time.Second))
 	}
 	if m.panel != nil {
 		key.panel = m.panelBottom()
@@ -154,21 +113,20 @@ func (m *model) statusBar() string {
 	return line
 }
 
-// convTitle is the current conversation's title for the session pill.
+// convTitle supplies the session name for the terminal window title.
 func (m *model) convTitle() string {
-	if m.conv == nil || m.conv.Title == "" {
+	if m.conv == nil {
 		return ""
 	}
 	return m.conv.Title
 }
 
-// toolbar draws the pills on the left and the context gauge plus token
-// usage on the right, dropping right-hand detail first when the width is
-// short. It records footerHits.
+// Reserve room for effort before truncating the model. Hit ranges cover
+// only visible controls, including in very narrow terminals.
 func (m *model) toolbar(key footerKey) string {
 	m.footerHits = m.footerHits[:0]
 	var sb strings.Builder
-	x := 1 // screen column: the line starts with one space of margin
+	x := 1
 	pill := func(act footerAction, s string) {
 		if sb.Len() > 0 {
 			sb.WriteByte(' ')
@@ -179,102 +137,34 @@ func (m *model) toolbar(key footerKey) string {
 		m.footerHits = append(m.footerHits, footerHit{x0: x, x1: x + w, act: act})
 		x += w
 	}
-
 	model := key.name
-	if i := strings.IndexByte(model, '/'); i >= 0 && (lipgloss.Width(model) > 28 || m.width < 80) {
-		model = model[i+1:] // the connection is in the Connections panel; the model matters here
+	if i := strings.IndexByte(model, '/'); i >= 0 {
+		model = model[i+1:] // the stats panel includes the connection
 	}
-	if m.width < 80 {
-		// Reserve a readable context percentage before spending space on
-		// the model name. Hit ranges cover only the rendered pill.
-		budget := max(4, m.width-1-x-1-4-lipgloss.Width(m.gauge(key))-2)
-		model = ansi.Truncate(model, budget, "…")
+	effort := ""
+	if key.effort != "" {
+		effort = pillStyleFor(key.hover == actEffort).Render("Effort: " + key.effort + " ▾")
+		if m.width < lipgloss.Width(effort)+9 {
+			effort = pillStyleFor(key.hover == actEffort).Render(key.effort + " ▾")
+		}
+		if m.width < lipgloss.Width(effort)+9 {
+			effort = ""
+		}
 	}
-	pill(actModel, pillStyleFor(key.hover == actModel).Render(model+" ▾"))
-	if key.effort != "" && m.width >= 80 && (!key.compacting || m.width >= 110) {
-		pill(actEffort, pillStyleFor(key.hover == actEffort).Render("Reasoning: "+key.effort+" ▾"))
+	budget := m.width - 2
+	if effort != "" {
+		budget -= lipgloss.Width(effort) + 1
 	}
-	conv := key.conv
-	if conv == "" {
-		conv = "new session"
+	if budget >= 5 {
+		pill(actModel, pillStyleFor(key.hover == actModel).Render(ansi.Truncate(model, budget-4, "…")+" ▾"))
 	}
-	if m.width >= 80 && !key.compacting {
-		pill(actSession, pillStyleFor(key.hover == actSession).Render(ansi.Truncate(conv, 24, "…")+" ▾"))
+	if effort != "" {
+		pill(actEffort, effort)
 	}
-
-	// Right side: gauge, then usage; each dropped when it does not fit.
-	right := m.gauge(key)
-	usage := humanTokens(key.usageIn) + "↑ " + humanTokens(key.usageOut) + "↓"
-	if key.running {
-		usage = fmt.Sprintf("%ds · %s", key.elapsed, usage)
-	}
-	sep := dimStyle.Render(" · ")
-	if lipgloss.Width(right) > 0 {
-		right += sep
-	}
-	right += dimStyle.Render(usage)
-	gap := m.width - 1 - x - lipgloss.Width(right)
-	if gap < 2 {
-		right = m.gauge(key)
-		gap = m.width - 1 - x - lipgloss.Width(right)
-	}
-	if gap < 2 {
-		right = ""
-		gap = 0
-	}
-	if right != "" {
-		gx := x + gap
-		m.footerHits = append(m.footerHits, footerHit{x0: gx, x1: gx + lipgloss.Width(right), act: actContext})
-	}
-	line := " " + sb.String() + strings.Repeat(" ", gap) + right
-	return ansi.Truncate(line, m.width, "")
+	return ansi.Truncate(" "+sb.String(), m.width, "")
 }
 
-// gauge is the context-window meter: eight cells filled in proportion to
-// the last request's input tokens, amber from the compaction threshold on.
-func (m *model) gauge(key footerKey) string {
-	label := "ctx "
-	if key.assumed {
-		label = "ctx* "
-	}
-	if key.compacting {
-		wave := []rune("▁▂▄▆█▆▄▂")
-		var bar strings.Builder
-		cells := 8
-		if m.width < 80 {
-			cells = 4
-		}
-		if m.width < 50 {
-			cells = 2
-		}
-		for i := 0; i < cells; i++ {
-			bar.WriteRune(wave[(i-key.compactFrame+8)%8])
-		}
-		return dimStyle.Render(label) + gaugeStyle.Render(bar.String()) + dimStyle.Render(" compacting")
-	}
-	if key.ctx <= 0 || key.lastInput <= 0 {
-		return dimStyle.Render(label + "?")
-	}
-	pct := int(key.lastInput * 100 / int64(key.ctx))
-	cells := min((pct*8+50)/100, 8)
-	bar := strings.Repeat("▰", cells) + strings.Repeat("▱", 8-cells)
-	style := gaugeStyle
-	if pct >= 80 {
-		style = gaugeWarnStyle
-	}
-	if m.width < 80 {
-		return dimStyle.Render(label) + style.Render(fmt.Sprintf("%d%%", pct))
-	}
-	s := dimStyle.Render(label) + style.Render(bar) + " " + fmt.Sprintf("%d%%", pct)
-	if m.width >= 110 {
-		s += dimStyle.Render(" · " + humanTokens(key.lastInput) + "/" + humanTokens(int64(key.ctx)))
-	}
-	return s
-}
-
-// statusLine shows, in order of urgency: what the agent is
-// doing and input overflow hints; with nothing to report and an
-// empty input box, the key hints.
+// Keep approvals, pending messages and recovery visible without hovering.
 func (m *model) statusLine(key footerKey) string {
 	if key.panel != "" {
 		return " " + ansi.Truncate(key.panel, m.width-1, "…")
@@ -312,17 +202,11 @@ func (m *model) statusLine(key footerKey) string {
 		if key.running {
 			return " " + hintsStyle.Render(ansi.Truncate("enter steer · alt+enter queue · shift+enter newline", m.width-1, "…"))
 		}
-		if !key.inputEmpty {
-			return ""
-		}
-		hint := ansi.Truncate("/ or cmd+p for command palette", m.width, "…")
-		return hintsStyle.Width(m.width).Align(lipgloss.Right).Render(hint)
+		return ""
 	}
 	return " " + ansi.Truncate(strings.Join(parts, dimStyle.Render(" · ")), m.width-1, "…")
 }
 
-// footerClick handles a click on the toolbar row; y is relative to the
-// screen. It reports whether the click landed on a control.
 func (m *model) footerClick(x, y int) (tea.Cmd, bool) {
 	if y != m.toolbarY() {
 		return nil, false
@@ -334,16 +218,8 @@ func (m *model) footerClick(x, y int) (tea.Cmd, bool) {
 			return nil, true
 		}
 		return m.openPaletteSub("Switch model", modelItems(m)), true
-	case actSession:
-		items := append([]paletteItem{{title: "New conversation", hint: "/clear", cmd: "/clear"}}, sessionItems(m)...)
-		return m.openPaletteSub("Session", items), true
 	case actEffort:
 		return m.openPaletteSub("Reasoning effort", effortItems(m)), true
-	case actContext:
-		if m.sess.Agent != nil && m.sess.Agent.ContextWindowAssumed() {
-			m.flash(assumedContextNotice)
-		}
-		return nil, true
 	}
 	return nil, false
 }

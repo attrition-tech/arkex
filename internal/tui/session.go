@@ -36,6 +36,8 @@ func (m *model) saveConv() {
 // turn) so the next prompt starts a new session file.
 func (m *model) newConv() {
 	m.cancelPromptEdit()
+	m.dismissStats()
+	m.responseTiming = responseTiming{}
 	m.editAfterStop, m.removeOnStop = 0, 0
 	m.requestTimings, m.runDuration = nil, 0
 	m.conv = nil
@@ -161,6 +163,7 @@ func (m *model) resumeWithModel(id, override string) tea.Cmd {
 
 func (m *model) loadConversation(s *session.Session) {
 	m.cancelPromptEdit()
+	m.responseTiming = responseTiming{}
 	m.editAfterStop, m.removeOnStop = 0, 0
 	s.ImportCheckpoints(func(text string) bool { _, ok := agent.CompactSummary(text); return ok })
 	m.requestTimings, m.runDuration = nil, 0

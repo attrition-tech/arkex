@@ -45,7 +45,7 @@ func (s span) codeActionAt(x, line int) int {
 // handleMouse routes wheel, motion and left-click events. Mouse reporting
 // is on while m.mouse is set (View sets MouseModeAllMotion); /mouse turns
 // it off so terminals that need it for native text selection get it back.
-func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+func (m *model) handleMouse(msg tea.MouseMsg) (next tea.Model, cmd tea.Cmd) {
 	mo := msg.Mouse()
 	m.pointer = &pos{line: mo.Y, col: mo.X}
 	if m.inputDragging {
@@ -59,6 +59,11 @@ func (m *model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
+	statsCmd, handled := m.statsMouse(msg)
+	if handled {
+		return m, statsCmd
+	}
+	defer func() { cmd = tea.Batch(cmd, statsCmd) }()
 	m.scrollHover = m.scrollHit(mo.X, mo.Y)
 	if _, wheel := msg.(tea.MouseWheelMsg); !wheel && m.scrollHover {
 		m.clearSelection()

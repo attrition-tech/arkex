@@ -191,6 +191,15 @@ and **Copy draft**. Unavailable actions explain what is needed. Escape goes back
 without losing your search or selection. Settings groups theme, mouse support,
 and reasoning effort.
 
+The footer keeps only **model and effort** visible; the session name stays in
+the terminal window title. Hover the model for context usage, cumulative
+input/output tokens (including naming), and response timing. Click the model or
+effort to change it. `/stats` pins the details for keyboard access, including
+with mouse support off; Page Up/Down or the wheel scrolls a short panel, and
+Escape closes it without stopping a run. `/timing` shows per-request details.
+Timings are local to the current session and are not restored on resume.
+Approvals, errors, compaction, and pending-message status remain visible.
+
 Click **Copy code** above a code block or **Reply actions** below a reply to copy
 its original source, without terminal wrapping. The same actions are available
 through Tab then Enter; search **Copy reply or code** for older replies. Sent

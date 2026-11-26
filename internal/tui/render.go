@@ -32,7 +32,6 @@ var (
 	delStyle       lipgloss.Style
 	pillStyle      lipgloss.Style
 	pillHoverStyle lipgloss.Style
-	gaugeStyle     lipgloss.Style
 	gaugeWarnStyle lipgloss.Style
 	hintsStyle     lipgloss.Style
 	hoverStyle     lipgloss.Style

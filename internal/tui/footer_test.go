@@ -12,25 +12,21 @@ import (
 	"github.com/attrition-tech/arkex/internal/provider"
 )
 
-func TestIdleHintRightAligned(t *testing.T) {
+func TestFooterKeepsIdleQuietAndActionsVisible(t *testing.T) {
 	m, _ := testModel(t)
-	const hint = "/ or cmd+p for command palette"
 	for _, width := range []int{120, 60, 40, 20} {
 		m.width = width
-		got := ansi.Strip(m.statusLine(footerKey{inputEmpty: true}))
-		if ansi.StringWidth(got) != width || strings.Contains(got, "enter send") {
+		got := m.statusLine(footerKey{})
+		if got != "" {
 			t.Fatalf("width %d: %q", width, got)
-		}
-		if width >= len(hint) && got != strings.Repeat(" ", width-len(hint))+hint {
-			t.Fatalf("hint not right aligned: %q", got)
 		}
 	}
 	m.width = 80
-	if got := ansi.Strip(m.statusLine(footerKey{inputEmpty: true, status: "cancelling…"})); got != " cancelling…" {
+	if got := ansi.Strip(m.statusLine(footerKey{status: "cancelling…"})); got != " cancelling…" {
 		t.Fatalf("status must remain left aligned: %q", got)
 	}
-	if got := m.statusLine(footerKey{}); got != "" {
-		t.Fatalf("hint must hide while typing: %q", got)
+	if got := ansi.Strip(m.statusLine(footerKey{running: true})); !strings.Contains(got, "enter steer · alt+enter queue · shift+enter newline") {
+		t.Fatalf("working shortcuts missing: %q", got)
 	}
 }
 
@@ -42,8 +38,7 @@ func TestHumanTokens(t *testing.T) {
 	}
 }
 
-// footerModel is a test model with a connected agent so every pill and the
-// gauge render.
+// footerModel is a test model with a connected agent and measured usage.
 func footerModel(t *testing.T) *model {
 	m, _ := testModel(t)
 	m.o.Connect = nil
@@ -78,9 +73,9 @@ func TestToolbarHitsMatchRenderedPills(t *testing.T) {
 	m := footerModel(t)
 	line := ansi.Strip(strings.SplitN(m.footer(), "\n", 2)[0])
 	cells := []rune(line)
-	want := map[footerAction]string{actModel: "local/deepseek-v4-flash ▾", actEffort: "Reasoning: Default ▾", actSession: "new session ▾", actContext: "ctx ▰▰▰▰▱▱▱▱ 45% · 42↑ 7↓"}
-	if strings.Contains(line, "BUILD ▾") {
-		t.Fatalf("mode control still rendered: %q", line)
+	want := map[footerAction]string{actModel: "deepseek-v4-flash ▾", actEffort: "Effort: Default ▾"}
+	if len(m.footerHits) != 2 || strings.Contains(line, "session") || strings.Contains(line, "45%") {
+		t.Fatalf("footer must contain only model and effort: %q", line)
 	}
 	for _, h := range m.footerHits {
 		got := strings.TrimSpace(string(cells[h.x0:h.x1]))
@@ -102,7 +97,7 @@ func TestToolbarEffortIsNotDuplicated(t *testing.T) {
 	m.sess.Name = "local/model:variant:high"
 	m.sess.Agent.Model.Ref.Thinking = "high"
 	line := ansi.Strip(m.footer())
-	if !strings.Contains(line, "local/model:variant ▾") || !strings.Contains(line, "Reasoning: High ▾") || strings.Contains(line, "variant:high") {
+	if !strings.Contains(line, "model:variant ▾") || !strings.Contains(line, "Effort: High ▾") || strings.Contains(line, "variant:high") {
 		t.Fatalf("duplicate effort or damaged model ID: %q", line)
 	}
 	if m.sess.Name != "local/model:variant:high" {
@@ -110,7 +105,7 @@ func TestToolbarEffortIsNotDuplicated(t *testing.T) {
 	}
 	m.sess.Name = "local/model:high"
 	m.sess.Agent.Model.Ref.Thinking = ""
-	if line := ansi.Strip(m.footer()); !strings.Contains(line, "local/model:high ▾") {
+	if line := ansi.Strip(m.footer()); !strings.Contains(line, "model:high ▾") {
 		t.Fatalf("stripped a model ID suffix without an effort override: %q", line)
 	}
 }
@@ -118,67 +113,59 @@ func TestToolbarEffortIsNotDuplicated(t *testing.T) {
 func TestToolbarClicksOpenTheRightPicker(t *testing.T) {
 	m := footerModel(t)
 	y := m.toolbarY()
-	for act, title := range map[footerAction]string{actModel: "Switch model", actEffort: "Reasoning effort", actSession: "Session"} {
+	for act, title := range map[footerAction]string{actModel: "Switch model", actEffort: "Reasoning effort"} {
 		click(m, hitCenter(t, m, act), y)
 		if m.pal == nil || m.pal.levels[len(m.pal.levels)-1].title != title {
 			t.Fatalf("clicking pill %d: palette = %+v", act, m.pal)
 		}
 		m.closePalette()
 	}
-	// A click on the gauge with an unknown window explains how it is learned.
-	m.sess.Agent.SetContextWindow(0)
-	click(m, hitCenter(t, m, actContext), y)
-	if m.flashText != assumedContextNotice {
-		t.Fatalf("gauge click notice missing: %q", m.flashText)
-	}
 	// Clicks on the hints row and in the gap do nothing.
 	before := len(m.blocks)
 	click(m, 2, m.statusY())
-	click(m, hitCenter(t, m, actSession)+8, y)
+	click(m, m.width-1, y)
 	if m.pal != nil || len(m.blocks) != before {
 		t.Fatal("hints row / gap must be inert")
 	}
 }
 
-func TestGaugeWarnsFromCompactionThreshold(t *testing.T) {
+func TestStatsWarnFromCompactionThreshold(t *testing.T) {
 	m := footerModel(t)
 	m.lastInput = 799
-	if f := m.footer(); strings.Contains(f, gaugeWarnStyle.Render("▰▰▰▰▰▰▰▰")) || !strings.Contains(ansi.Strip(f), "79%") {
+	m.command("/stats")
+	if f := m.View().Content; strings.Contains(f, gaugeWarnStyle.Render("799 / 1000 · 79%")) || !strings.Contains(ansi.Strip(f), "79%") {
 		t.Fatalf("79%% must not warn: %q", ansi.Strip(f))
 	}
 	m.lastInput = 800
-	if f := m.footer(); !strings.Contains(f, gaugeWarnStyle.Render("▰▰▰▰▰▰▱▱")) || !strings.Contains(ansi.Strip(f), "80%") {
+	if f := m.View().Content; !strings.Contains(f, gaugeWarnStyle.Render("800 / 1000 · 80%")) {
 		t.Fatalf("80%% must warn in amber: %q", ansi.Strip(f))
 	}
 	m.sess.Agent.SetContextWindow(0)
-	if f := ansi.Strip(m.footer()); !strings.Contains(f, "ctx*") || !strings.Contains(f, "0%") {
+	if f := ansi.Strip(m.View().Content); !strings.Contains(f, "Limit assumed") || !strings.Contains(f, "262144 · 0%") {
 		t.Fatalf("unknown window: %q", f)
 	}
 }
 
-func TestToolbarDropsDetailWhenNarrow(t *testing.T) {
+func TestToolbarPreservesEffortWhenNarrow(t *testing.T) {
 	m := footerModel(t)
-	m.width = 120
-	if f := ansi.Strip(m.footer()); !strings.Contains(f, "450/1k") {
-		t.Fatalf("wide footer should show used/window: %q", f)
-	}
-	m.width = 100
-	if f := ansi.Strip(m.footer()); strings.Contains(f, "450/1k") || !strings.Contains(f, "new session") {
-		t.Fatalf("100 cols drops the token detail only: %q", f)
-	}
-	m.width = 70
-	f := ansi.Strip(m.footer())
-	if strings.Contains(f, "new session") || !strings.Contains(f, "45%") {
-		t.Fatalf("70 cols drops the session pill, keeps the gauge: %q", f)
-	}
-	m.width = 44
-	f = ansi.Strip(m.footer())
-	if !strings.Contains(f, "deepseek-v4-flash ▾") || !strings.Contains(f, "45%") {
-		t.Fatalf("44 cols keeps the model and gauge: %q", f)
-	}
-	for _, l := range strings.Split(m.footer(), "\n") {
-		if w := ansi.StringWidth(l); w > m.width {
-			t.Fatalf("footer line %d wide at width %d: %q", w, m.width, ansi.Strip(l))
+	for _, width := range []int{120, 60, 44, 24, 20, 10} {
+		m.width = width
+		f := ansi.Strip(m.footer())
+		if width >= 20 && !strings.Contains(f, "Default ▾") {
+			t.Fatalf("%d columns crowded out effort: %q", width, f)
+		}
+		if width >= 44 && !strings.Contains(f, "deepseek-v4-flash ▾") {
+			t.Fatalf("model truncated too soon: %q", f)
+		}
+		for _, l := range strings.Split(m.footer(), "\n") {
+			if w := ansi.StringWidth(l); w > width {
+				t.Fatalf("footer line %d wide at width %d: %q", w, width, ansi.Strip(l))
+			}
+		}
+		for _, h := range m.footerHits {
+			if h.x1 > width || h.x0 >= h.x1 {
+				t.Fatalf("invisible hit at width %d: %+v", width, h)
+			}
 		}
 	}
 }
@@ -191,13 +178,13 @@ func TestLongModelNameDropsConnectionPrefix(t *testing.T) {
 	}
 }
 
-func TestCompactToolbarPreservesContextAndHitBounds(t *testing.T) {
+func TestCompactToolbarPreservesEffortAndHitBounds(t *testing.T) {
 	m := footerModel(t)
 	m.sess.Name = "connection/" + strings.Repeat("long-model-", 8)
 	m.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
 	line := ansi.Strip(strings.Split(m.footer(), "\n")[0])
-	if !strings.Contains(line, "ctx 45%") || !strings.Contains(line, "… ▾") {
-		t.Fatalf("long model crowded out context: %q", line)
+	if !strings.Contains(line, "Effort: Default ▾") || !strings.Contains(line, "… ▾") {
+		t.Fatalf("long model crowded out effort: %q", line)
 	}
 	for _, h := range m.footerHits {
 		if h.x1 > 60 || h.x0 >= h.x1 {
@@ -229,7 +216,7 @@ func TestHoverLightsPillsAndCards(t *testing.T) {
 		t.Fatalf("hoverAct = %d", m.hoverAct)
 	}
 	lit := m.footer()
-	if lit == plain || !strings.Contains(lit, pillHoverStyle.Render("local/deepseek-v4-flash ▾")) {
+	if lit == plain || !strings.Contains(lit, pillHoverStyle.Render("deepseek-v4-flash ▾")) {
 		t.Fatalf("hovered pill not lit:\n%q", lit)
 	}
 	if ansi.Strip(lit) != ansi.Strip(plain) {

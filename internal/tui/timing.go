@@ -56,8 +56,11 @@ func responseDuration(d time.Duration) string {
 	return fmt.Sprintf("%dm %02ds", int64(d/time.Minute), int64(d/time.Second)%60)
 }
 
-func (r responseTiming) footer(now time.Time, running bool) string {
-	first, llm, total := "—", "—", "—"
+func (r responseTiming) values(now time.Time, running bool) (first, llm, total string) {
+	first, llm, total = "—", "—", "—"
+	if r.start.IsZero() {
+		return
+	}
 	if !r.firstText.IsZero() {
 		first = responseDuration(r.firstText.Sub(r.start))
 		if r.llmObserved {
@@ -75,7 +78,7 @@ func (r responseTiming) footer(now time.Time, running bool) string {
 	} else if !r.lastText.IsZero() {
 		total = responseDuration(r.lastText.Sub(r.start))
 	}
-	return fmt.Sprintf("First text %s · LLM first text %s · Total %s", first, llm, total)
+	return
 }
 
 func timingDuration(d time.Duration) string {
@@ -92,7 +95,7 @@ func timingDuration(d time.Duration) string {
 }
 
 func timingItems(m *model) []paletteItem {
-	if len(m.requestTimings) == 0 {
+	if len(m.requestTimings) == 0 && m.responseTiming.start.IsZero() {
 		return []paletteItem{{title: "No completed requests measured", detail: "Timings are local to this run; resumed history has no timing data."}}
 	}
 	title := "Total run · " + timingDuration(m.runDuration)
@@ -106,7 +109,9 @@ func timingItems(m *model) []paletteItem {
 			detail: fmt.Sprintf("Prepare %s · Dispatch %s · Connection %s · First answer text %s", timingDuration(r.Prepare), timingDuration(r.Dispatch), timingDuration(r.Connection), timingDuration(r.FirstText)),
 		})
 	}
+	first, llm, answer := m.responseTiming.values(time.Now(), m.running)
+	items = append(items, paletteItem{title: "Response timing", detail: fmt.Sprintf("First answer %s · LLM first answer %s · Answer elapsed %s", first, llm, answer)})
 	items = append(items, paletteItem{title: "What these numbers measure", detail: "From request preparation: dispatch ends at HTTP write; first token is first reasoning/text/tool content. Connection includes pool wait, DNS, TCP and TLS; it overlaps dispatch. Failed requests are included."})
-	items = append(items, paletteItem{title: "Response footer", detail: "First text: send to first answer chunk (not reasoning/tools). LLM first text: that request's HTTP write to the same chunk. Total: send to last answer chunk, including intervening tools/retries; while running it shows elapsed time. Receipt is before UI batching/painting. Timings are not saved on resume."})
+	items = append(items, paletteItem{title: "Response measurements", detail: "First answer: send to first answer chunk (not reasoning/tools). LLM first answer: that request's HTTP write to the same chunk. Answer elapsed: send to last answer chunk, including intervening tools/retries; while running it shows elapsed time. Run elapsed includes all work up to stopping. Receipt is before UI batching/painting. Timings are not saved on resume."})
 	return items
 }

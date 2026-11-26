@@ -175,15 +175,15 @@ func TestViewFrameGeometryAndCursor(t *testing.T) {
 	lines := frameLines(t, m, "default")
 	v := m.View()
 	// 30 rows: 25 transcript, top border, input text, bottom border,
-	// toolbar, hints. The cursor sits after the border and padding.
+	// toolbar, reserved status row. The cursor sits after the border and padding.
 	if v.Cursor == nil || v.Cursor.Y != 26 || v.Cursor.X != 2 {
 		t.Fatalf("cursor = %+v", v.Cursor)
 	}
 	if !strings.Contains(ansi.Strip(lines[28]), "no model ▾") || strings.Contains(ansi.Strip(lines[28]), "BUILD") {
 		t.Fatalf("toolbar not on row 28: %q", ansi.Strip(lines[28]))
 	}
-	if !strings.HasSuffix(ansi.Strip(lines[29]), "/ or cmd+p for command palette") {
-		t.Fatalf("hints not on row 29: %q", ansi.Strip(lines[29]))
+	if strings.TrimSpace(ansi.Strip(lines[29])) != "" {
+		t.Fatalf("idle status row must stay quiet: %q", ansi.Strip(lines[29]))
 	}
 	if !v.AltScreen {
 		t.Fatal("alt screen off")

@@ -35,6 +35,7 @@ var commands = []command{
 	{name: "/continue", desc: "let the model keep going after a run paused"},
 	{name: "/queue", desc: "review, restore, delete or resume saved pending messages"},
 	{name: "/effort", args: "[level]", desc: "choose reasoning effort for the current model"},
+	{name: "/stats", desc: "keep context, token usage and response timing open (also hover the model)"},
 	{name: "/timing", desc: "inspect request timing for the current session"},
 	{name: "/mouse", desc: "toggle mouse support (wheel, clicks)"},
 	{name: "/theme", args: "[name]", desc: "pick a colour theme (saved to ui.theme)"},
